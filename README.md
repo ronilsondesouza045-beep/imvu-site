@@ -308,6 +308,7 @@ Nesse caso, deixe `frontend/config.js` vazio e abra a URL do Render direto. O ba
 
 - O backend usa **uma** conta IMVU para todas as consultas; os watchers compartilham a mesma sessão e a mesma conexão IMQ.
 - Se o app Android estiver rodando com a mesma conta, os dois logins podem competir pela sessão. Use uma conta dedicada para o backend ou pare o app durante o teste.
+- Não rode o backend local e o backend do Render ao mesmo tempo com a mesma conta: são duas sessões IMQ distintas. Para testar localmente, pare o serviço do Render ou use outra conta.
 - O `imvu://` é exibido em formato legível na interface, mas o botão **Copiar link** copia a versão URL-encoded que o cliente do IMVU espera.
 - O sync inicial tenta, em ordem: lista de amigos do bot → listas oficiais (`friends`, `recent`, `explore`) → catvu → salas próprias do alvo → probe das filas IMQ. Depois disso o IMQ manda.
 - O probe assina `chat-<cid>-1..800` e considera fila viva quando o gateway responde `status: 0`. As heurísticas de sala privada seguem o `Tracker.kt`.
