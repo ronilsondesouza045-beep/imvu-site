@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: imvu-radar-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: IMVU_USER
+        sync: false
+      - key: IMVU_PASS
+        sync: false
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: MAX_WATCHERS
+        value: "20"
+      - key: TARGET_ROOM_SCAN
+        value: "800"
+      - key: OWN_ROOM_SCAN
+        value: "60"
