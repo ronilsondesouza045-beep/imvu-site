@@ -2,6 +2,21 @@
 
 Versão web do **IMVU Radar**: qualquer pessoa digita um nick e vê, em tempo real, em qual sala a conta está, a privacidade da sala, o link direto `imvu://room/...` e os ocupantes com avatar 2D.
 
+## Online agora
+
+- **Site:** https://imvu-radar-web.netlify.app
+- **Backend:** https://imvu-radar-backend.onrender.com
+- **Health:** https://imvu-radar-backend.onrender.com/health
+- **Repo:** https://github.com/ronilsondesouza045-beep/imvu-site
+- **Painel Render:** https://dashboard.render.com/web/srv-dbp5ob0n74is73cuq7jg
+
+O Render faz auto-deploy a cada push na `main`. O frontend na Netlify é um deploy manual; para atualizar depois de mudar o `frontend/`:
+
+```powershell
+cd C:\Users\ronis\Desktop\imvu-site\frontend
+netlify deploy --prod --dir . --no-build
+```
+
 O backend foi escrito em Node.js replicando o que o app Android (Kotlin) já faz:
 
 - login na API do IMVU → `sauce` + `cid` + `session_id`
