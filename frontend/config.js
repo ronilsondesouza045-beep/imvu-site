@@ -6,4 +6,4 @@
 //
 // Exemplo:
 // window.RADAR_BACKEND = "https://imvu-radar-backend.onrender.com";
-window.RADAR_BACKEND = "";
+window.RADAR_BACKEND = "https://imvu-radar-backend.onrender.com";
