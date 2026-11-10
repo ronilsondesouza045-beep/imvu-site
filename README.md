@@ -152,13 +152,13 @@ Arquivos de referência: `app/src/main/java/br/com/imvuradar/app/core/ImvuApi.kt
 | Sauce | `login.denormalized[*].data.sauce` |
 | Sessão | `GET /login/me` → `relations.quick_chat_profile` (cid) e `data.session_id` |
 | Resolver nick | `GET /user?username=<nick>` |
-| Usuário por cid | `GET /user/user-<cid>` |
+| Usuário por cid | `GET /user/user-<cid>` → `relations.current_room` = sala atual |
 | Lista de salas | `GET /room_list/room_list-<botCid>-<friends|recent|explore|feature>/rooms` |
 | Metadados da sala | `GET /room/room-<roomId>` → `name`, `privacy`, `occupancy`, `capacity`, `owner_avatarname` |
 | Roster | `GET /chat/chat-<roomId>/participants` |
 | Presença | `GET /presence/presence-<cid>` |
-| Sala atual / índice externo | `https://catvu.live/api/private-room/find?username=<nick>` |
-| Roster ao vivo de sala privada | `https://catvu.live/api/private-room/watch/<roomId>` (SSE) |
+| Sala atual (primário) | `GET /user/user-<cid>` → `relations.current_room` |
+| Sala atual / roster (fallback) | `https://catvu.live/api/private-room/find?username=<nick>` + `/api/private-room/watch/<roomId>` |
 
 ### Protocolo IMQ (idêntico ao `ImqClient.kt`)
 
@@ -204,17 +204,15 @@ Filas usadas por alvo: `inv:/chat/chat-<cid>-1..800`, `inv:/user/user-<cid>` e `
 
 ### Alvo parado e sala privada
 
-O IMQ só manda evento de presença quando o alvo **entra, sai ou troca de sala**. Se ele já estiver parado dentro de uma sala quando o vigia começa, não existe evento para esperar. Por isso o backend usa o catvu como leitura de estado:
+O IMQ só manda evento de presença quando o alvo **entra, sai ou troca de sala**. Se ele já estiver parado dentro de uma sala quando o vigia começa, não existe evento para esperar. A leitura principal agora é feita direto no IMVU:
 
-1. `GET https://catvu.live/api/private-room/find?username=<nick>` devolve o `roomId` atual, `isPrivate`, `hasOccupiedPrivateRoom` e o nome da sala — mesmo com o alvo imóvel.
-2. Se o roster do IMVU confirmar o `cid`, a sala é cravada com os dados oficiais.
-3. Se o roster do IMVU vier 403 (sala privada de terceiro), a sala é cravada com o `roomId`/nome do catvu e o backend abre `GET /api/private-room/watch/<roomId>` (SSE) para receber:
-   - `snapshot` com a lista completa de ocupantes;
-   - `joined` / `left` em tempo real;
-   - nomes, `displayName` e `thumbnailUrl` de cada pessoa.
-4. Se o catvu não conhecer o alvo, o backend continua com as listas oficiais, salas próprias e probe das filas IMQ.
+1. `GET /user/user-<cid>` devolve `relations.current_room`, por exemplo `https://api.imvu.com/room/room-66280412-137`. Esse é o `roomId` **atual** do alvo, mesmo parado e mesmo em sala privada.
+2. O backend lê essa relation no início do watch e recheca a cada ~20s (`syncCurrentRoom`), em paralelo ao IMQ. Se o `roomId` mudar, a sala é atualizada; se for privada, a tag vem como privada e o link direto é montado pelo dono do `roomId`.
+3. O IMQ continua sendo a fonte em tempo real de entrada/saída. Também tratamos `msg_g2c_create_mount` e `msg_g2c_state_change` na fila `presence-<cid>`, que podem entregar o estado inicial da sala na assinatura.
+4. O catvu continua como fallback opcional (`find` + `watch`) para nome de sala e roster inicial quando o host consegue acessá-lo. Em Render/cloud o catvu pode estourar timeout ou ser bloqueado; por isso ele **não é mais requisito** para achar o alvo.
+5. Se o room node do IMVU vier 403 (sala privada de terceiro), o nome cai para `Sala privada N`; os ocupantes vêm do roster autenticado quando liberado e dos eventos `edge:participants` do IMQ.
 
-O `catvu find` é rechecado a cada `CATVU_RETRY_MS` enquanto o alvo não foi localizado. O backend também trata `msg_g2c_create_mount` na fila `presence-<cid>`, que pode entregar o estado inicial da sala na assinatura.
+O catvu é rechecado a cada `CATVU_RETRY_MS` apenas enquanto o alvo ainda não foi localizado pela relation, pelas listas, pelas salas próprias ou pelo probe.
 
 ---
 
@@ -327,8 +325,8 @@ Nesse caso, deixe `frontend/config.js` vazio e abra a URL do Render direto. O ba
 - Se o app Android estiver rodando com a mesma conta, os dois logins podem competir pela sessão. Use uma conta dedicada para o backend ou pare o app durante o teste.
 - Não rode o backend local e o backend do Render ao mesmo tempo com a mesma conta: são duas sessões IMQ distintas. Para testar localmente, pare o serviço do Render ou use outra conta.
 - O `imvu://` é exibido em formato legível na interface, mas o botão **Copiar link** copia a versão URL-encoded que o cliente do IMVU espera.
-- O sync inicial tenta, em ordem: catvu find (sala atual, inclusive parado) → lista de amigos do bot → listas oficiais (`friends`, `recent`, `explore`) → salas próprias do alvo → probe das filas IMQ. Depois disso o IMQ manda.
-- Sala privada: o roster do IMVU pode vir 403; o `catvu watch` (SSE) preenche os ocupantes com nomes e thumbnails e mantém `joined`/`left` em tempo real.
+- O sync inicial tenta, em ordem: `relations.current_room` do usuário (sala atual, inclusive parado) → catvu find (fallback) → lista de amigos do bot → listas oficiais (`friends`, `recent`, `explore`) → salas próprias do alvo → probe das filas IMQ. Depois disso o IMQ manda.
+- Sala privada: a relation `current_room` aponta a sala mesmo sem evento; se o roster do IMVU vier 403, os ocupantes conhecidos vêm dos eventos `edge:participants` do IMQ e o `catvu watch` (quando acessível) complementa o snapshot inicial.
 - O probe assina `chat-<cid>-1..800` e considera fila viva quando o gateway responde `status: 0`. As heurísticas de sala privada seguem o `Tracker.kt`.
 - `MAX_WATCHERS` limita o custo. Cada alvo assina até 800 filas; com muitos alvos simultâneos, aumente apenas se o host aguentar.
 - A API do IMVU não é oficial/documentada para esse uso e pode mudar sem aviso. Se um endpoint mudar, ajuste `backend/src/imvu.js`.
