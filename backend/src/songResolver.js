@@ -69,6 +69,25 @@ function runYtDlpJson(args) {
   });
 }
 
+async function searchSoundCloud(query) {
+  const text = clean(query);
+  if (!text) return "";
+  const info = await withTimeout(
+    runYtDlpJson([
+      "--dump-single-json",
+      "--no-warnings",
+      "--skip-download",
+      "--flat-playlist",
+      `scsearch1:${text}`,
+    ]),
+    SEARCH_TIMEOUT_MS,
+    "A busca no SoundCloud demorou demais."
+  );
+  const entries = Array.isArray(info.entries) ? info.entries : [];
+  const first = entries.find((entry) => entry && (entry.webpage_url || entry.url));
+  return first?.webpage_url || first?.url || "";
+}
+
 /** Search YouTube and return one normalized song. */
 export async function searchSong(query) {
   const text = clean(query);
@@ -183,17 +202,52 @@ function openYtDlp(url) {
 
   const stream = new PassThrough();
   child.stdout.pipe(stream);
-  child.on("error", (error) => stream.destroy(error));
-  child.on("close", (code) => {
-    if (code !== 0) {
-      const reason = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" | ");
-      stream.destroy(new Error(reason || `yt-dlp terminou com código ${code}`));
-    }
+
+  let firstChunk = false;
+  const ready = new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.removeListener("data", onData);
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onData = (chunk) => {
+      firstChunk = true;
+      try {
+        stream.pause();
+        stream.unshift(chunk);
+      } catch {
+        /* ignora */
+      }
+      finish();
+    };
+    const onError = (error) => finish(error);
+    const onClose = (code) => {
+      if (code !== 0) {
+        const reason = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" | ");
+        finish(new Error(reason || `yt-dlp terminou com código ${code}`));
+      } else if (!firstChunk) {
+        finish(new Error("yt-dlp terminou sem entregar áudio."));
+      }
+    };
+    const timer = setTimeout(
+      () => finish(new Error("yt-dlp não entregou áudio em 15s.")),
+      15_000
+    );
+    stream.once("data", onData);
+    child.once("error", onError);
+    child.once("close", onClose);
   });
 
   return {
     kind: "yt-dlp",
     stream,
+    ready,
     kill() {
       try {
         child.kill("SIGKILL");
@@ -215,6 +269,7 @@ async function openPlayDl(url) {
   return {
     kind: "play-dl",
     stream: result.stream,
+    ready: Promise.resolve(),
     kill() {
       try {
         result.stream.destroy();
@@ -234,6 +289,7 @@ function openYtdlCore(url) {
   return {
     kind: "ytdl-core",
     stream,
+    ready: Promise.resolve(),
     kill() {
       try {
         stream.destroy();
@@ -244,6 +300,17 @@ function openYtdlCore(url) {
   };
 }
 
+async function preflight(source, label, errors) {
+  try {
+    await source.ready;
+    return source;
+  } catch (error) {
+    source.kill?.();
+    errors.push(`${label}: ${error?.message || error}`);
+    return null;
+  }
+}
+
 /** Open the best available audio source for a song. */
 export async function openAudio(song) {
   const url = clean(song?.url);
@@ -252,9 +319,29 @@ export async function openAudio(song) {
   const errors = [];
 
   try {
-    return openYtDlp(url);
+    const source = await preflight(openYtDlp(url), "YouTube yt-dlp", errors);
+    if (source) return source;
   } catch (error) {
-    errors.push(`yt-dlp: ${error?.message || error}`);
+    errors.push(`YouTube yt-dlp: ${error?.message || error}`);
+  }
+
+  // O IP de datacenter do Render costuma ser bloqueado pelo YouTube. O
+  // SoundCloud não tem esse challenge; o título original continua no chat.
+  const fallbackQuery = clean(song?.title) || clean(song?.query);
+  if (fallbackQuery) {
+    try {
+      const soundcloudUrl = await searchSoundCloud(fallbackQuery);
+      if (soundcloudUrl) {
+        const source = await preflight(
+          openYtDlp(soundcloudUrl),
+          "SoundCloud yt-dlp",
+          errors
+        );
+        if (source) return { ...source, kind: "yt-dlp-soundcloud" };
+      }
+    } catch (error) {
+      errors.push(`SoundCloud: ${error?.message || error}`);
+    }
   }
 
   try {
