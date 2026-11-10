@@ -1538,6 +1538,40 @@ kbd {
   line-height: 1.55;
 }
 
+.radio-maintenance {
+  max-width: 620px;
+  margin: 18px auto 28px;
+  padding: 40px 28px;
+  border: 1px solid rgba(167, 139, 250, 0.2);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(124, 58, 237, 0.18), transparent 62%),
+    #08080f;
+  box-shadow: 0 24px 60px -30px rgba(124, 58, 237, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  text-align: center;
+}
+
+.radio-maintenance-icon {
+  font-size: 36px;
+  line-height: 1;
+}
+
+.radio-maintenance h2 {
+  margin-top: 12px;
+  color: #ede9fe;
+  font-size: 1.8rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.radio-maintenance p {
+  max-width: 480px;
+  margin: 8px auto 0;
+  color: #8b93a7;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .radio-admin-warning {
   display: flex;
   align-items: flex-start;
@@ -1812,6 +1846,26 @@ kbd {
     margin-top: 5px;
     font-size: 11px;
     line-height: 1.45;
+  }
+
+  .radio-maintenance {
+    margin: 12px auto 18px;
+    padding: 30px 18px;
+    border-radius: 14px;
+  }
+
+  .radio-maintenance-icon {
+    font-size: 30px;
+  }
+
+  .radio-maintenance h2 {
+    margin-top: 9px;
+    font-size: 1.35rem;
+  }
+
+  .radio-maintenance p {
+    font-size: 12px;
+    line-height: 1.5;
   }
 
   .radio-admin-warning {

@@ -15,6 +15,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
 const MAX_WATCHERS = Math.max(1, Number(process.env.MAX_WATCHERS) || 20);
 const VERSION = "1.0.0";
+const BOT_MAINTENANCE = ["true", "1", "yes", "on"].includes(
+  String(process.env.BOT_MAINTENANCE || "").trim().toLowerCase()
+);
+const BOT_MAINTENANCE_MESSAGE =
+  "O bot de música está em manutenção. Voltamos dia 23!";
 
 const log = {
   info: (...args) => console.log(new Date().toISOString(), "[info]", ...args),
@@ -48,6 +53,28 @@ app.use(
     },
   })
 );
+// Antes do parser de JSON: manutenção deve responder 503 mesmo com body inválido.
+app.use("/api/bot", (req, res, next) => {
+  if (!BOT_MAINTENANCE) {
+    next();
+    return;
+  }
+  res.status(503).json({
+    ok: false,
+    maintenance: true,
+    error: BOT_MAINTENANCE_MESSAGE,
+    message: BOT_MAINTENANCE_MESSAGE,
+  });
+});
+
+app.use("/api/radio", (req, res, next) => {
+  if (!BOT_MAINTENANCE) {
+    next();
+    return;
+  }
+  res.status(503).type("text/plain").send(BOT_MAINTENANCE_MESSAGE);
+});
+
 app.use(express.json({ limit: "16kb" }));
 
 app.get("/health", (_req, res) => {
@@ -58,6 +85,16 @@ app.get("/health", (_req, res) => {
     uptime: Math.round(process.uptime()),
     ...tracker.stats(),
     now: Date.now(),
+  });
+});
+
+app.get("/api/status", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    ok: true,
+    maintenance: BOT_MAINTENANCE,
+    message: BOT_MAINTENANCE ? BOT_MAINTENANCE_MESSAGE : "",
+    bot: BOT_MAINTENANCE ? null : musicBot.status(),
   });
 });
 

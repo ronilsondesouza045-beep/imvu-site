@@ -268,6 +268,18 @@ O site ganhou a aba **🎧 Rádio para Sala**, agora com fila e busca livre no Y
 
 **Conta:** recomendado usar uma conta separada do rastreador. Para reutilizar a conta do rastreador, defina `BOT_ALLOW_SAME_ACCOUNT=1` e use as mesmas `BOT_USERNAME`/`BOT_PASSWORD` de `IMVU_USER`/`IMVU_PASS`. No teste com `tropinha1` o radar continuou `loggedIn/IMQ ready` e o bot ficou na sala `The Penthouse`; o painel mostra o aviso de conta compartilhada. A conta precisa ser registrada/antiga: a Guest nova `VUmusic` foi recusada no join com `CHAT_PARTICIPANT-011`; a `tropinha1` entrou.
 
+### Modo de manutenção do Music Bot
+
+Para pausar **somente a música** sem afetar o radar:
+
+1. Defina `BOT_MAINTENANCE=true` no `backend/.env` e em **Render > Environment**.
+2. Salve/redeploy. O backend não loga a conta do bot, não inicia ffmpeg/stream e:
+   - `/api/status` retorna `{ maintenance: true }`;
+   - `/api/bot/*` e `/api/radio/*` retornam **503** com `O bot de música está em manutenção. Voltamos dia 23!`;
+   - a aba do site mostra o card de manutenção e os inputs ficam desativados;
+   - o tracker, o `/health`, o WebSocket do radar e o resto do site continuam normais.
+3. Para voltar no dia 23, basta trocar para `BOT_MAINTENANCE=false` (ou remover a variável), salvar e reiniciar/redeploy. Não precisa alterar código; depois ative o bot na sala normalmente.
+
 Configuração em `backend/.env`:
 
 ```env

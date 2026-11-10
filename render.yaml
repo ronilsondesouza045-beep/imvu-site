@@ -31,6 +31,8 @@ services:
         sync: false
       - key: BOT_ALLOW_SAME_ACCOUNT
         sync: false
+      - key: BOT_MAINTENANCE
+        sync: false
       - key: BOT_SEND_INTERVAL_MS
         value: "1500"
       - key: PUBLIC_BASE_URL

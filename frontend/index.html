@@ -223,7 +223,13 @@
           <p>Ative o bot, dê Admin a ele e peça QUALQUER música. O bot busca no YouTube e toca a fila na sala.</p>
         </section>
 
-        <section class="radio-admin-warning" role="note" aria-label="Aviso de permissão de Admin">
+        <section id="radioMaintenance" class="radio-maintenance hidden" role="status" aria-live="polite">
+          <div class="radio-maintenance-icon" aria-hidden="true">🛠️</div>
+          <h2 class="font-display">🛠️ Rádio em Manutenção</h2>
+          <p id="radioMaintenanceText">Estamos melhorando o sistema de música. O DJ Bot voltará no dia 23!</p>
+        </section>
+
+        <section id="radioAdminWarning" class="radio-admin-warning" role="note" aria-label="Aviso de permissão de Admin">
           <div class="radio-admin-warning-icon" aria-hidden="true">!</div>
           <div>
             <strong>⚠️ ATENÇÃO: o IMVU não tem "Admin". O Host é o dono da sala — você não consegue promover o bot a Host.</strong>
@@ -232,7 +238,7 @@
           </div>
         </section>
 
-        <section class="grid gap-4 lg:grid-cols-[1.1fr_.9fr]">
+        <section id="radioGrid" class="grid gap-4 lg:grid-cols-[1.1fr_.9fr]">
           <article class="card p-5">
             <div class="flex items-start justify-between gap-3">
               <div class="eyebrow-sm">Ativar DJ</div>
