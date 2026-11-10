@@ -193,6 +193,7 @@ export class RadarTracker {
     if (!track.refreshLoopTimer) {
       track.refreshLoopTimer = setInterval(() => {
         if (this.tracks.get(track.cid) !== track) return;
+        this.syncCurrentRoom(track).catch(() => {});
         if (!track.room) return;
         this.refreshRoom(track, { notify: false }).catch(() => {});
       }, ROOM_REFRESH_MS);
@@ -336,7 +337,17 @@ export class RadarTracker {
     const cid = track.cid;
     const active = () => this.isActive(track, gen);
 
-    // Catvu roda em paralelo: e a fonte que devolve a sala ATUAL do alvo
+    // 0) Fonte direta do IMVU: relations.current_room do node do usuario.
+    // Funciona com o alvo parado e nao depende do catvu.
+    this.emitStatus(track, "loading", "Lendo sala atual no IMVU...");
+    const relationRoom = await this.api.currentRoom(cid, 0).catch(() => "");
+    if (!active()) return;
+    if (relationRoom) {
+      await this.setRoom(track, relationRoom, { via: "user_relation", gen });
+      return;
+    }
+
+    // Catvu entra como fallback: e a fonte que devolve a sala ATUAL do alvo
     // mesmo quando ele esta parado (inclusive sala privada).
     track.catvuLastTry = now();
     // Force no inicio: evita usar cache de uma sala anterior do mesmo nick.
@@ -471,10 +482,29 @@ export class RadarTracker {
 
   // ---------------- probe ----------------
 
+  async syncCurrentRoom(track) {
+    if (this.tracks.get(track.cid) !== track) return false;
+    const rid = await this.api.currentRoom(track.cid, 5_000).catch(() => "");
+    if (!rid) return false;
+    if (track.room?.roomId === rid) return true;
+    await this.setRoom(track, rid, { via: "user_relation", gen: track.gen });
+    return true;
+  }
+
   async probeTick(track) {
     if (this.tracks.get(track.cid) !== track) return;
     if (track.probeInFlight) return track.probeInFlight;
     track.probeInFlight = (async () => {
+      // Primeiro tenta a relation current_room do IMVU (uma request barata).
+      if (!track.room) {
+        const relationRoom = await this.api.currentRoom(track.cid, 5_000).catch(() => "");
+        if (this.tracks.get(track.cid) !== track) return;
+        if (relationRoom) {
+          await this.setRoom(track, relationRoom, { via: "user_relation", gen: track.gen });
+          return;
+        }
+      }
+
       // Rechecagem periodica do catvu: se o alvo entrou/esta parado numa sala
       // que o evento do IMQ nao cobriu, o find devolve o roomId exato.
       if (!track.room && now() - (track.catvuLastTry || 0) > CATVU_RETRY_MS) {

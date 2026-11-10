@@ -66,6 +66,7 @@ export class ImvuApi {
     this.loginPromise = null;
 
     this.userCache = new Map();
+    this.userNodeCache = new Map();
     this.roomMetaCache = new Map();
     this.rosterCache = new Map();
     this.roomListCache = new Map();
@@ -272,6 +273,44 @@ export class ImvuApi {
       return person;
     }
     return null;
+  }
+
+  /**
+   * Node completo de /user/user-<cid>, com as relations.
+   * A relation `current_room` aponta para a sala ATUAL do usuario, mesmo
+   * quando ele esta parado e mesmo que a sala seja privada.
+   */
+  async userNode(cid, ttl = 10_000) {
+    const id = String(cid || "");
+    if (!/^\d+$/.test(id)) return null;
+    const cached = this.userNodeCache.get(id);
+    if (cached && now() - cached.at < ttl) return cached.node;
+
+    const env = await this.getJson(`/user/user-${id}`);
+    const den = env?.denormalized;
+    if (!den) return null;
+    for (const [key, node] of Object.entries(den)) {
+      if (!key.endsWith(`/user/user-${id}`) && !key.endsWith(`user-${id}`)) continue;
+      if (!node) continue;
+      const result = {
+        relations: node.relations || {},
+        data: node.data || {},
+      };
+      this.userNodeCache.set(id, { at: now(), node: result });
+      if (result.data && result.data.username) {
+        this.userCache.set(id, { at: now(), person: this.personFromData(id, result.data) });
+      }
+      return result;
+    }
+    return null;
+  }
+
+  /** cid -> roomId atual via relations.current_room ("" se nao estiver em sala). */
+  async currentRoom(cid, ttl = 10_000) {
+    const node = await this.userNode(cid, ttl);
+    const url = String(node?.relations?.current_room || "");
+    const match = /room-(\d+-\d+)\s*$/i.exec(url) || /(\d+-\d+)\s*$/.exec(url);
+    return match ? match[1] : "";
   }
 
   async usernameOf(cid) {
