@@ -120,7 +120,8 @@ IMVU_PASS=sua_senha
 CORS_ORIGIN=*
 MAX_WATCHERS=20
 TARGET_ROOM_SCAN=800
-OWN_ROOM_SCAN=60
+OWN_ROOM_SCAN=120
+CATVU_RETRY_MS=20000
 ```
 
 | Variável | Para que serve |
@@ -129,7 +130,8 @@ OWN_ROOM_SCAN=60
 | `CORS_ORIGIN` | `*` ou lista de origens separadas por vírgula |
 | `MAX_WATCHERS` | limite de navegadores vigiando ao mesmo tempo |
 | `TARGET_ROOM_SCAN` | quantas filas `chat-<cid>-1..N` assinar (1–800) |
-| `OWN_ROOM_SCAN` | quantas salas próprias do alvo varrer no sync inicial |
+| `OWN_ROOM_SCAN` | quantas salas próprias do alvo varrer no sync inicial (padrão 120) |
+| `CATVU_RETRY_MS` | intervalo de rechecagem do catvu quando o alvo ainda não foi localizado (padrão 20000) |
 | `PROBE_INTERVAL_MS` | intervalo do probe de filas (padrão 15000) |
 | `PROBE_TIMEOUT_MS` | timeout do probe (padrão 12000) |
 | `ROOM_REFRESH_MS` | atualização periódica do roster (padrão 20000) |
@@ -155,7 +157,8 @@ Arquivos de referência: `app/src/main/java/br/com/imvuradar/app/core/ImvuApi.kt
 | Metadados da sala | `GET /room/room-<roomId>` → `name`, `privacy`, `occupancy`, `capacity`, `owner_avatarname` |
 | Roster | `GET /chat/chat-<roomId>/participants` |
 | Presença | `GET /presence/presence-<cid>` |
-| Índice extra (opcional) | `https://catvu.live/api/private-room/find?username=<nick>` |
+| Sala atual / índice externo | `https://catvu.live/api/private-room/find?username=<nick>` |
+| Roster ao vivo de sala privada | `https://catvu.live/api/private-room/watch/<roomId>` (SSE) |
 
 ### Protocolo IMQ (idêntico ao `ImqClient.kt`)
 
@@ -198,6 +201,20 @@ Filas usadas por alvo: `inv:/chat/chat-<cid>-1..800`, `inv:/user/user-<cid>` e `
 7. Keepalive: `{"record":"msg_c2g_ping"}` a cada 15s; watchdog de 60s sem mensagem; reconexão com backoff de 5/15/30/60/120/300s.
 
 > O campo `avatar_portrait_image` às vezes vem como um PNG vazio no crop `dressup_front_heads`. O proxy `/api/avatar` detecta isso e cai automaticamente para o `avatar_image` completo (mesma URL sem query string).
+
+### Alvo parado e sala privada
+
+O IMQ só manda evento de presença quando o alvo **entra, sai ou troca de sala**. Se ele já estiver parado dentro de uma sala quando o vigia começa, não existe evento para esperar. Por isso o backend usa o catvu como leitura de estado:
+
+1. `GET https://catvu.live/api/private-room/find?username=<nick>` devolve o `roomId` atual, `isPrivate`, `hasOccupiedPrivateRoom` e o nome da sala — mesmo com o alvo imóvel.
+2. Se o roster do IMVU confirmar o `cid`, a sala é cravada com os dados oficiais.
+3. Se o roster do IMVU vier 403 (sala privada de terceiro), a sala é cravada com o `roomId`/nome do catvu e o backend abre `GET /api/private-room/watch/<roomId>` (SSE) para receber:
+   - `snapshot` com a lista completa de ocupantes;
+   - `joined` / `left` em tempo real;
+   - nomes, `displayName` e `thumbnailUrl` de cada pessoa.
+4. Se o catvu não conhecer o alvo, o backend continua com as listas oficiais, salas próprias e probe das filas IMQ.
+
+O `catvu find` é rechecado a cada `CATVU_RETRY_MS` enquanto o alvo não foi localizado. O backend também trata `msg_g2c_create_mount` na fila `presence-<cid>`, que pode entregar o estado inicial da sala na assinatura.
 
 ---
 
@@ -300,7 +317,7 @@ Nesse caso, deixe `frontend/config.js` vazio e abra a URL do Render direto. O ba
 | Frontend conecta mas não recebe nada | backend dormindo ou CORS | abra `/health`; ajuste `CORS_ORIGIN` |
 | `Mixed Content` no navegador | frontend HTTPS tentando backend HTTP | use HTTPS/WSS no backend |
 | Avatar preto/vazio | portrait vazio no IMVU | o proxy já cai para o avatar completo; limpe o cache se precisar |
-| Primeira vigilância demora | sync inicial (listas + salas + probe) | é normal: 10–30s; o status mostra cada etapa |
+| Primeira vigilância demora | sync inicial (catvu + listas + salas + probe) | é normal: 5–30s; o status mostra cada etapa |
 
 ---
 
@@ -310,7 +327,8 @@ Nesse caso, deixe `frontend/config.js` vazio e abra a URL do Render direto. O ba
 - Se o app Android estiver rodando com a mesma conta, os dois logins podem competir pela sessão. Use uma conta dedicada para o backend ou pare o app durante o teste.
 - Não rode o backend local e o backend do Render ao mesmo tempo com a mesma conta: são duas sessões IMQ distintas. Para testar localmente, pare o serviço do Render ou use outra conta.
 - O `imvu://` é exibido em formato legível na interface, mas o botão **Copiar link** copia a versão URL-encoded que o cliente do IMVU espera.
-- O sync inicial tenta, em ordem: lista de amigos do bot → listas oficiais (`friends`, `recent`, `explore`) → catvu → salas próprias do alvo → probe das filas IMQ. Depois disso o IMQ manda.
+- O sync inicial tenta, em ordem: catvu find (sala atual, inclusive parado) → lista de amigos do bot → listas oficiais (`friends`, `recent`, `explore`) → salas próprias do alvo → probe das filas IMQ. Depois disso o IMQ manda.
+- Sala privada: o roster do IMVU pode vir 403; o `catvu watch` (SSE) preenche os ocupantes com nomes e thumbnails e mantém `joined`/`left` em tempo real.
 - O probe assina `chat-<cid>-1..800` e considera fila viva quando o gateway responde `status: 0`. As heurísticas de sala privada seguem o `Tracker.kt`.
 - `MAX_WATCHERS` limita o custo. Cada alvo assina até 800 filas; com muitos alvos simultâneos, aumente apenas se o host aguentar.
 - A API do IMVU não é oficial/documentada para esse uso e pode mudar sem aviso. Se um endpoint mudar, ajuste `backend/src/imvu.js`.

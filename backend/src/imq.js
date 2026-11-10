@@ -414,6 +414,7 @@ export class ImqClient {
       case "msg_g2c_left_queue":
         break;
       case "msg_g2c_create_mount":
+        this.handleCreateMount(message);
         break;
       default:
         break;
@@ -461,13 +462,7 @@ export class ImqClient {
     }
   }
 
-  handleStateChange(message) {
-    const queue = String(message.queue || "");
-    const props = {};
-    for (const property of message.properties || []) {
-      if (!property?.key) continue;
-      props[property.key] = b64d(property.value);
-    }
+  processStateProps(queue, props) {
     const cidMatch = /presence-(\d+)/.exec(queue);
     const cid = cidMatch ? cidMatch[1] : "";
     this.emit({ type: "state", cid, queue, props });
@@ -484,6 +479,35 @@ export class ImqClient {
     if (room) {
       this.emit({ type: "presence", action: "updated", room, cid, source: "presence" });
     }
+  }
+
+  handleStateChange(message) {
+    const queue = String(message.queue || "");
+    const props = {};
+    for (const property of message.properties || []) {
+      if (!property?.key) continue;
+      props[property.key] = b64d(property.value);
+    }
+    this.processStateProps(queue, props);
+  }
+
+  /**
+   * O gateway manda msg_g2c_create_mount quando uma fila ganha um mount.
+   * Para a fila de presenca ele traz o estado inicial (inclusive a sala
+   * atual), o que resolve alvo parado sem esperar um novo evento.
+   */
+  handleCreateMount(message) {
+    const queue = String(message.queue || "");
+    const mount = String(message.mount || "");
+    const props = {};
+    for (const property of message.properties || []) {
+      if (!property?.key) continue;
+      props[property.key] = b64d(property.value);
+    }
+    if (!Object.keys(props).length) return;
+    if (!queue.includes("presence-")) return;
+    this.emit({ type: "mount", queue, mount, props });
+    this.processStateProps(queue, props);
   }
 
   handleSendMessage(message) {

@@ -327,19 +327,27 @@ export class ImvuApi {
     return meta;
   }
 
-  async roomInfo(rid) {
+  async roomInfo(rid, hint = null) {
     const id = String(rid || "");
-    const meta = await this.roomMeta(id);
-    if (!meta) return null;
+    const meta = await this.roomMeta(id).catch(() => null);
+    if (!meta && !hint) return null;
 
-    const restricted = Boolean(meta.restricted);
-    let name = String(meta.name || "");
+    const m = meta || {};
+    const restricted = Boolean(m.restricted);
+    const hintName = String(hint?.name || hint?.roomName || "");
+    const hintPrivate = Boolean(
+      hint?.isPrivate ?? hint?.is_private ?? String(hint?.privacy || "").toLowerCase() === "private"
+    );
+    let name = String(m.name || "") || hintName;
     if (!name) {
       const suffix = id.split("-").pop();
       name = restricted ? (suffix === "1" ? "My Room" : `Sala privada ${suffix}`) : id;
     }
-    let owner = String(meta.owner_avatarname || "");
-    if (!owner && !restricted) {
+
+    // O dono da sala e o primeiro cid do roomId; o node do usuario e publico
+    // mesmo quando o room node vem 403 (sala privada de terceiro).
+    let owner = String(m.owner_avatarname || "");
+    if (!owner) {
       const head = id.split("-")[0];
       if (/^\d+$/.test(head)) {
         try {
@@ -349,6 +357,8 @@ export class ImvuApi {
         }
       }
     }
+
+    const isPrivate = restricted || hintPrivate || String(m.privacy || "").toLowerCase() === "private";
     const directLink =
       owner && name ? `imvu://room/${encodeQuery(owner)}/${encodeQuery(name)}` : "";
     const webLink = id ? `https://www.imvu.com/next/chat/room-${id}/` : "";
@@ -356,20 +366,21 @@ export class ImvuApi {
     return {
       roomId: id,
       name,
-      privacy: restricted ? "private" : String(meta.privacy || "public"),
-      privacyLabel: restricted || String(meta.privacy || "").toLowerCase() === "private" ? "Privada" : "Pública",
+      privacy: isPrivate ? "private" : String(m.privacy || "public"),
+      privacyLabel: isPrivate ? "Privada" : "Pública",
       restricted,
       owner,
-      occupancy: intOr(meta.occupancy, 0),
-      capacity: intOr(meta.capacity, 0),
-      render: normalizeUrl(meta.rendered_image || ""),
-      cover: normalizeUrl(meta.image_url || ""),
-      description: String(meta.description || "").slice(0, 300),
-      joinUrl: String(meta.join_room_url || (id ? `https://go.imvu.com/chat/room-${id}` : "")),
+      occupancy: intOr(m.occupancy, 0),
+      capacity: intOr(m.capacity, 0),
+      render: normalizeUrl(m.rendered_image || ""),
+      cover: normalizeUrl(m.image_url || ""),
+      description: String(m.description || "").slice(0, 300),
+      joinUrl: String(m.join_room_url || (id ? `https://go.imvu.com/chat/room-${id}` : "")),
       directLink,
       webLink,
-      error: String(meta.error || ""),
-      message: String(meta.message || ""),
+      error: String(m.error || ""),
+      message: String(m.message || ""),
+      source: hint ? "catvu" : "imvu",
     };
   }
 

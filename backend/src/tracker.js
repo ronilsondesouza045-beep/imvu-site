@@ -1,5 +1,6 @@
 import { ImvuApi, safeNick } from "./imvu.js";
 import { ImqClient, isLeftAction, isLiveAction } from "./imq.js";
+import { findRooms as catvuFind, watchRoom as catvuWatch, catvuPerson } from "./catvu.js";
 
 const envInt = (name, fallback) => {
   const value = Number(process.env[name]);
@@ -7,8 +8,9 @@ const envInt = (name, fallback) => {
 };
 
 const LIST_DEADLINE_MS = envInt("LIST_SCAN_DEADLINE_MS", 15_000);
-const OWN_ROOM_SCAN = envInt("OWN_ROOM_SCAN", 60);
+const OWN_ROOM_SCAN = envInt("OWN_ROOM_SCAN", 120);
 const OWN_DEADLINE_MS = envInt("OWN_SCAN_DEADLINE_MS", 12_000);
+const CATVU_RETRY_MS = envInt("CATVU_RETRY_MS", 20_000);
 const TARGET_ROOM_SCAN = envInt("TARGET_ROOM_SCAN", 800);
 const PROBE_INTERVAL_MS = envInt("PROBE_INTERVAL_MS", 15_000);
 const PROBE_TIMEOUT_MS = envInt("PROBE_TIMEOUT_MS", 12_000);
@@ -159,6 +161,11 @@ export class RadarTracker {
       refreshNotify: false,
       probeTimer: null,
       refreshLoopTimer: null,
+      catvu: null,
+      catvuWatch: null,
+      catvuRoomId: "",
+      catvuHadSnapshot: false,
+      catvuLastTry: 0,
       createdAt: now(),
     };
   }
@@ -210,10 +217,24 @@ export class RadarTracker {
 
   destroyTrack(track) {
     this.clearTrackTimers(track);
+    this.stopCatvuWatch(track);
     if (track.room) this.releaseRoom(track.room.roomId);
     this.imq.removeTarget(track.cid);
     this.tracks.delete(track.cid);
     this.log.info(`[tracker] parou de vigiar ${track.nick} (${track.cid})`);
+  }
+
+  stopCatvuWatch(track) {
+    if (track.catvuWatch) {
+      try {
+        track.catvuWatch.stop();
+      } catch {
+        /* ignora */
+      }
+    }
+    track.catvuWatch = null;
+    track.catvuRoomId = "";
+    track.catvuHadSnapshot = false;
   }
 
   destroy() {
@@ -305,7 +326,11 @@ export class RadarTracker {
     const cid = track.cid;
     const active = () => this.isActive(track, gen);
 
-    const catvuPromise = this.api.catvuRooms(track.nick).catch(() => []);
+    // Catvu roda em paralelo: e a fonte que devolve a sala ATUAL do alvo
+    // mesmo quando ele esta parado (inclusive sala privada).
+    track.catvuLastTry = now();
+    // Force no inicio: evita usar cache de uma sala anterior do mesmo nick.
+    const catvuPromise = catvuFind(track.nick, { timeout: 10_000, force: true }).catch(() => null);
 
     // 1) Lista de amigos do bot: o IMVU ja denormaliza a sala atual de cada amigo.
     try {
@@ -323,7 +348,16 @@ export class RadarTracker {
     }
     if (!active()) return;
 
-    // 2) Listas oficiais: friends / recent / explore.
+    // 2) Catvu find: sala exata, sem depender de evento de movimento.
+    this.emitStatus(track, "loading", "Consultando indice de salas (catvu)...");
+    const catvu = await catvuPromise;
+    if (catvu?.rooms?.length) {
+      this.emitStatus(track, "loading", "Catvu: sala localizada, lendo ocupantes...");
+      if (await this.applyCatvuResult(track, catvu, gen)) return;
+    }
+    if (!active()) return;
+
+    // 3) Listas oficiais: friends / recent / explore.
     this.emitStatus(track, "loading", "Varrendo listas oficiais...");
     const listHits = await this.api.findInLists(cid, ["friends", "recent", "explore"], {
       deadlineMs: now() + LIST_DEADLINE_MS,
@@ -340,18 +374,6 @@ export class RadarTracker {
       });
       return;
     }
-
-    // 3) Indice externo (catvu), confirmando pelo roster.
-    const catvu = await catvuPromise;
-    for (const rid of catvu.slice(0, 4)) {
-      if (!active()) return;
-      const people = await this.api.roster(rid, 1_000).catch(() => []);
-      if (people.some((person) => person.cid === cid)) {
-        await this.setRoom(track, rid, { seed: people, via: "catvu", gen });
-        return;
-      }
-    }
-    if (!active()) return;
 
     // 4) Salas proprias do alvo com ocupacao > 0.
     this.emitStatus(track, "loading", "Varrendo salas do alvo...");
@@ -384,12 +406,74 @@ export class RadarTracker {
     });
   }
 
+  /**
+   * Usa o resultado do catvu para cravar a sala. Se o roster do IMVU
+   * confirmar o cid, melhor; se nao, confia no find (ele devolve a sala
+   * atual mesmo para alvo parado/sala privada).
+   */
+  async applyCatvuResult(track, result, gen) {
+    if (!result?.rooms?.length) return false;
+    if (!this.isActive(track, gen) || track.room) return false;
+    track.catvu = result;
+
+    const rooms = [...result.rooms];
+    const rank = (room) => {
+      let score = 0;
+      if (room.isPrivate && result.hasOccupiedPrivateRoom) score += 100;
+      if (room.source === "find_locations") score += 60;
+      if (room.source === "imq_enum") score += 50;
+      if (room.isPrivate) score += 30;
+      return score;
+    };
+    rooms.sort((a, b) => rank(b) - rank(a));
+
+    for (const candidate of rooms.slice(0, 4)) {
+      if (!this.isActive(track, gen) || track.room) break;
+      const people = await this.api.roster(candidate.roomId, 0).catch(() => []);
+      if (!this.isActive(track, gen) || track.room) return Boolean(track.room);
+
+      if (people.some((person) => person.cid === track.cid)) {
+        await this.setRoom(track, candidate.roomId, {
+          seed: people,
+          via: candidate.isPrivate ? "catvu_private" : "catvu",
+          hint: candidate,
+          gen,
+        });
+        return true;
+      }
+
+      const trusted =
+        rooms.length === 1 ||
+        candidate.source === "find_locations" ||
+        (candidate.isPrivate && result.hasOccupiedPrivateRoom);
+      if (trusted) {
+        await this.setRoom(track, candidate.roomId, {
+          seed: people,
+          via: candidate.isPrivate ? "catvu_private" : "catvu",
+          hint: candidate,
+          gen,
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+
   // ---------------- probe ----------------
 
   async probeTick(track) {
     if (this.tracks.get(track.cid) !== track) return;
     if (track.probeInFlight) return track.probeInFlight;
     track.probeInFlight = (async () => {
+      // Rechecagem periodica do catvu: se o alvo entrou/esta parado numa sala
+      // que o evento do IMQ nao cobriu, o find devolve o roomId exato.
+      if (!track.room && now() - (track.catvuLastTry || 0) > CATVU_RETRY_MS) {
+        track.catvuLastTry = now();
+        const result = await catvuFind(track.nick, { timeout: 8_000 }).catch(() => null);
+        if (this.tracks.get(track.cid) !== track) return;
+        if (result && (await this.applyCatvuResult(track, result, track.gen))) return;
+      }
+
       const live = await this.imq.probeQueues(track.cid, PROBE_TIMEOUT_MS);
       if (this.tracks.get(track.cid) !== track) return;
       if (track.room) return;
@@ -483,7 +567,7 @@ export class RadarTracker {
     return map;
   }
 
-  async setRoom(track, rid, { seed = null, via = "imq", gen = track.gen } = {}) {
+  async setRoom(track, rid, { seed = null, via = "imq", hint = null, gen = track.gen } = {}) {
     if (!this.isActive(track, gen)) return;
     if (!/^\d+-\d+$/.test(String(rid || ""))) return;
 
@@ -493,18 +577,20 @@ export class RadarTracker {
     }
 
     const [info, people] = await Promise.all([
-      this.api.roomInfo(rid).catch(() => null),
+      this.api.roomInfo(rid, hint).catch(() => null),
       seed ? Promise.resolve(seed) : this.api.roster(rid, 0).catch(() => []),
     ]);
     if (!this.isActive(track, gen)) return;
 
-    const fallbackName = String(rid).split("-").pop() === "1" ? "My Room" : `Sala ${rid}`;
+    const hintPrivate = Boolean(hint?.isPrivate ?? hint?.is_private);
+    const suffix = String(rid).split("-").pop();
+    const fallbackName = hint?.name || (suffix === "1" ? "My Room" : `Sala ${rid}`);
     const room = info || {
       roomId: rid,
       name: fallbackName,
-      privacy: "public",
-      privacyLabel: "Pública",
-      restricted: false,
+      privacy: hintPrivate ? "private" : "public",
+      privacyLabel: hintPrivate ? "Privada" : "Pública",
+      restricted: hintPrivate,
       owner: "",
       occupancy: 0,
       capacity: 0,
@@ -516,6 +602,7 @@ export class RadarTracker {
       webLink: `https://www.imvu.com/next/chat/room-${rid}/`,
       error: "",
       message: "",
+      source: hint ? "catvu" : "imvu",
     };
 
     if (track.room?.roomId && track.room.roomId !== rid) {
@@ -531,13 +618,159 @@ export class RadarTracker {
     track.lastLive = new Set();
     track.myRoomStreak = 0;
 
+    const needsCatvuWatch =
+      room.privacy === "private" ||
+      room.restricted ||
+      people.length === 0 ||
+      via.startsWith("catvu_private");
+    if (needsCatvuWatch) this.startCatvuWatch(track, rid);
+
     this.broadcast(track, this.roomMessage(track));
     this.broadcast(track, this.statusMessage(track, "online", `Na sala ${room.name}`));
     this.log.info(`[tracker] ${track.nick} -> ${room.name} (${rid}) via ${via}`);
   }
 
+  mergeOccupant(previous, incoming) {
+    if (!previous) return incoming;
+    return {
+      ...previous,
+      ...incoming,
+      avatar: previous.avatar || incoming.avatar,
+      avatarPortrait: previous.avatarPortrait || incoming.avatarPortrait,
+      avatarImage: previous.avatarImage || incoming.avatarImage,
+      render: previous.render || incoming.render,
+      displayName: incoming.displayName || previous.displayName,
+      username: incoming.username || previous.username,
+      isVip: incoming.isVip || previous.isVip,
+      isAp: incoming.isAp || previous.isAp,
+    };
+  }
+
+  emitOccupantJoin(track, person) {
+    this.broadcast(track, {
+      type: "occupant_join",
+      target: track.profile,
+      nick: track.nick,
+      room: track.room?.roomId || track.catvuRoomId,
+      cid: person.cid,
+      occupant: person,
+      total: track.occupants.size,
+      at: now(),
+    });
+  }
+
+  emitOccupantLeave(track, person) {
+    this.broadcast(track, {
+      type: "occupant_leave",
+      target: track.profile,
+      nick: track.nick,
+      room: track.room?.roomId || track.catvuRoomId,
+      cid: person.cid,
+      nickOut: person.username,
+      occupant: person,
+      total: track.occupants.size,
+      at: now(),
+    });
+  }
+
+  /**
+   * Roster SSE do catvu. Entra em cena quando o IMVU esconde o roster
+   * (sala privada de terceiro) ou quando a sala foi descoberta pelo find
+   * e ainda nao tem ocupantes legiveis.
+   */
+  startCatvuWatch(track, rid) {
+    const id = String(rid || "");
+    if (!id) return;
+    if (track.catvuWatch && track.catvuRoomId === id) return;
+
+    this.stopCatvuWatch(track);
+    track.catvuRoomId = id;
+    track.catvuHadSnapshot = false;
+
+    track.catvuWatch = catvuWatch(id, {
+      log: this.log,
+      onSnapshot: (participants) => {
+        if (this.tracks.get(track.cid) !== track) return;
+        if (track.room?.roomId !== id) return;
+        const people = (participants || []).map(catvuPerson).filter(Boolean);
+        if (!people.length) return;
+        this.applyCatvuPeople(track, people, { initial: !track.catvuHadSnapshot });
+        track.catvuHadSnapshot = true;
+      },
+      onJoin: (raw) => {
+        if (this.tracks.get(track.cid) !== track) return;
+        if (track.room?.roomId !== id) return;
+        const person = catvuPerson(raw?.person || raw);
+        if (person?.cid) this.applyCatvuJoin(track, person);
+      },
+      onLeave: (raw) => {
+        if (this.tracks.get(track.cid) !== track) return;
+        if (track.room?.roomId !== id) return;
+        const person = catvuPerson(raw?.person || raw || {});
+        if (person?.cid) this.applyCatvuLeave(track, person);
+      },
+      onStatus: (data) => {
+        if (typeof data?.message === "string") {
+          this.log.info(`[catvu] ${id}: ${data.message}`);
+        }
+      },
+      onError: () => {
+        /* reconecta sozinho; nao polui o log */
+      },
+    });
+    this.log.info(`[catvu] observando roster de ${id}`);
+  }
+
+  applyCatvuPeople(track, people, { initial = false } = {}) {
+    const rid = track.room?.roomId || track.catvuRoomId;
+    if (!rid) return;
+    const old = track.occupants;
+    const next = new Map();
+    next.set(track.cid, old.get(track.cid) || occupantFromPerson(track.profile));
+
+    for (const person of people) {
+      if (!person?.cid) continue;
+      const incoming = occupantFromPerson(person);
+      next.set(person.cid, this.mergeOccupant(old.get(person.cid), incoming));
+    }
+
+    track.occupants = next;
+
+    if (!initial) {
+      for (const person of next.values()) {
+        if (person.cid === track.cid) continue;
+        if (!old.has(person.cid)) this.emitOccupantJoin(track, person);
+      }
+      for (const person of old.values()) {
+        if (person.cid === track.cid) continue;
+        if (!next.has(person.cid)) this.emitOccupantLeave(track, person);
+      }
+    }
+
+    this.broadcast(track, this.roomMessage(track));
+  }
+
+  applyCatvuJoin(track, person) {
+    if (person.cid === track.cid) return;
+    const previous = track.occupants.get(person.cid);
+    const occupant = this.mergeOccupant(previous, occupantFromPerson(person));
+    track.occupants.set(person.cid, occupant);
+    if (!previous) this.emitOccupantJoin(track, occupant);
+    this.broadcast(track, this.roomMessage(track));
+  }
+
+  applyCatvuLeave(track, person) {
+    if (person.cid === track.cid) return;
+    const existing = track.occupants.get(person.cid);
+    if (!existing) return;
+    track.occupants.delete(person.cid);
+    this.emitOccupantLeave(track, existing);
+    this.broadcast(track, this.roomMessage(track));
+  }
+
   clearRoom(track, reason = "left") {
     if (!track.room) return;
+    this.stopCatvuWatch(track);
     const oldRoom = track.room;
     this.releaseRoom(oldRoom.roomId);
     track.room = null;
@@ -569,7 +802,7 @@ export class RadarTracker {
     const rid = track.room?.roomId;
     if (!rid) return;
     const [info, people] = await Promise.all([
-      this.api.roomInfo(rid).catch(() => null),
+      this.api.roomInfo(rid, track.room).catch(() => null),
       this.api.roster(rid, 0).catch(() => []),
     ]);
     if (track.room?.roomId !== rid) return;
@@ -581,6 +814,10 @@ export class RadarTracker {
         name: info.name || track.room.name,
         occupancy: Math.max(Number(info.occupancy) || 0, people.length),
       };
+    }
+
+    if (!track.catvuWatch && (track.room.privacy === "private" || track.room.restricted)) {
+      this.startCatvuWatch(track, rid);
     }
 
     // Roster vazio pode ser falha transitória (403/timeout) em sala privada.
