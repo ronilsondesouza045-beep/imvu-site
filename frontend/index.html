@@ -226,9 +226,9 @@
         <section class="radio-admin-warning" role="note" aria-label="Aviso de permissão de Admin">
           <div class="radio-admin-warning-icon" aria-hidden="true">!</div>
           <div>
-            <strong>⚠️ ATENÇÃO: Para o bot tocar as músicas automaticamente, você PRECISA dar permissão de ADMIN para ele na sua sala do IMVU.</strong>
-            <p><b>Como dar Admin:</b> Vá nas configurações da sua sala no IMVU &gt; Permissões &gt; Adicione o nick do bot como Admin.</p>
-            <p><b>Moderador não basta:</b> o IMVU só libera o controle do rádio para Admin/Host (ou para a conta dona da sala).</p>
+            <strong>⚠️ ATENÇÃO: o IMVU não tem "Admin". O Host é o dono da sala — você não consegue promover o bot a Host.</strong>
+            <p><b>O que existe:</b> adicionar o bot como <b>Moderador</b> em My Rooms &gt; sala &gt; engrenagem &gt; Settings &gt; Choose Moderators (Classic: Chat Rooms &gt; Manage &gt; Edit &gt; Room Moderators). Mas a API do rádio está negando controle automático para moderador.</p>
+            <p><b>Para tocar automático:</b> use a conta dona da sala como conta do bot (BOT_USERNAME = dono) ou uma sala que o próprio bot seja dono. Senão, copie o link MP3 em Media &gt; Radio Streaming &gt; Load.</p>
           </div>
         </section>
 

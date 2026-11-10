@@ -33,7 +33,7 @@ const COMMAND_COOLDOWN_MS = 2_500;
 const MAX_PENDING_MESSAGES = 12;
 const MAX_QUEUE = 30;
 const ADMIN_WARNING =
-  "⚠️ Preciso ser Admin da sala para tocar a música automaticamente. Me dê Admin ou copie este link no rádio:";
+  "⚠️ O IMVU não libera o rádio para Moderador. A conta do bot precisa ser a dona da sala (Host) ou uma sala que o próprio bot seja dono. Copie este link no rádio:";
 
 const mediaPlayerSong = (song) =>
   song
@@ -526,7 +526,7 @@ class MusicBot {
       const moderators = await room.moderators();
       if (moderators.some((user) => String(user.id) === String(client.rest.cid))) {
         hints.push(
-          "O bot está como Moderador; o IMVU exige Admin/Host (ou a conta dona da sala) para o media_player."
+          "O bot está como Moderador; o IMVU não libera o media_player para moderador. O Host é a conta dona da sala — não existe promover outro avatar a Admin/Host."
         );
       }
     } catch {
