@@ -168,12 +168,39 @@ class MusicBot {
       const chat = await room.chat();
       if (!chat) throw new Error("Essa sala nao tem chat classico para o bot entrar.");
 
-      const session = await room.join({
-        observeParticipants: false,
-        ignoreOwnMessages: true,
-        leaveWhenBooted: true,
-        keepAliveInterval: 45_000,
-      });
+      // Compatibilidade com a API atual: o @imvu/client manda POST {} em
+      // /chat/chat-<rid>/participants, mas o IMVU exige o id do usuario.
+      // Mantemos o client/realtime do library e so ajustamos esse POST.
+      const originalRequest = client.request;
+      client.request = function patchedRequest(url, options = {}) {
+        const method = String(options.method || "GET").toUpperCase();
+        const cleanUrl = String(url).split("?")[0].replace(/\/+$/, "");
+        const data = options.data;
+        const emptyData =
+          !data ||
+          (typeof data === "object" &&
+            !Array.isArray(data) &&
+            Object.keys(data).length === 0);
+        if (method === "POST" && cleanUrl.endsWith("/participants") && emptyData) {
+          return originalRequest.call(client, url, {
+            ...options,
+            data: { id: `https://api.imvu.com/user/user-${client.rest.cid}` },
+          });
+        }
+        return originalRequest.call(client, url, options);
+      };
+
+      let session;
+      try {
+        session = await room.join({
+          observeParticipants: false,
+          ignoreOwnMessages: true,
+          leaveWhenBooted: true,
+          keepAliveInterval: 45_000,
+        });
+      } finally {
+        delete client.request;
+      }
 
       this.session = session;
       this.connected = true;
