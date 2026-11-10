@@ -100,6 +100,26 @@ app.get("/api/diag", async (req, res) => {
   }
   const cid = person.cid;
   const catvu = await catvuFind(nick, { timeout: 12_000, force: true });
+  let catvuRaw = null;
+  try {
+    const rawResponse = await fetch(
+      `https://catvu.live/api/private-room/find?username=${encodeURIComponent(nick)}`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(12_000),
+      }
+    );
+    catvuRaw = {
+      status: rawResponse.status,
+      body: String(await rawResponse.text()).slice(0, 800),
+    };
+  } catch (error) {
+    catvuRaw = { error: String(error?.message || error) };
+  }
   const paths = [
     `/api/avatarcard.php?cid=${cid}`,
     `/api/users/get_user_current_room.php?cid=${cid}`,
@@ -112,9 +132,10 @@ app.get("/api/diag", async (req, res) => {
   const calls = {};
   for (const path of paths) {
     const result = await tracker.api.clientDynamic(path);
-    calls[path] = { status: result.status, body: String(result.text || "").slice(0, 1200) };
+    const limit = path.includes("avatarcard") ? 20_000 : 1_200;
+    calls[path] = { status: result.status, body: String(result.text || "").slice(0, limit) };
   }
-  res.json({ nick, cid, profile: person, catvu, calls });
+  res.json({ nick, cid, profile: person, catvu, catvuRaw, calls });
 });
 
 app.get("/api/avatar", async (req, res) => {
