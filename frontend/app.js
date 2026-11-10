@@ -36,6 +36,25 @@
     serverStatus: null,
   };
 
+  const alerts = {
+    enabled: false,
+    mode: "",
+    permission: typeof Notification !== "undefined" ? Notification.permission : "unsupported",
+    settings: { occupants: false },
+    subscription: null,
+    nick: "",
+    expiresAt: 0,
+    registration: null,
+    publicKey: "",
+    pushEnabled: false,
+    busy: false,
+    boundToBackend: false,
+    pendingTimer: null,
+    expiryTimer: null,
+    closeTimer: null,
+    log: [],
+  };
+
   const els = {
     connection: $("#connection"),
     connectionText: $("#connectionText"),
@@ -75,6 +94,19 @@
     occupantHint: $("#occupantHint"),
     occupants: $("#occupants"),
     toasts: $("#toasts"),
+    alertsBtn: $("#alertsBtn"),
+    alertsDot: $("#alertsDot"),
+    alertsOverlay: $("#alertsOverlay"),
+    alertsPanel: $("#alertsPanel"),
+    closeAlertsBtn: $("#closeAlertsBtn"),
+    enableAlertsBtn: $("#enableAlertsBtn"),
+    testAlertBtn: $("#testAlertBtn"),
+    disableAlertsBtn: $("#disableAlertsBtn"),
+    alertOccupants: $("#alertOccupants"),
+    alertsStatus: $("#alertsStatus"),
+    alertsStatusText: $("#alertsStatusText"),
+    alertsInfo: $("#alertsInfo"),
+    alertLog: $("#alertLog"),
   };
 
   // ---------------- utilidades ----------------
@@ -218,6 +250,484 @@
     }, wait);
   }
 
+  // ---------------- alertas / Web Push ----------------
+
+  function alertsLoadSettings() {
+    alerts.enabled = safeStorage.get("radar:alertsEnabled") === "1";
+    alerts.mode = safeStorage.get("radar:alertMode") || "";
+    alerts.settings.occupants = safeStorage.get("radar:alertOccupants") === "1";
+    alerts.expiresAt = Number(safeStorage.get("radar:alertExpires") || 0) || 0;
+    alerts.nick = safeStorage.get("radar:alertNick") || "";
+    try {
+      const parsed = JSON.parse(safeStorage.get("radar:alertLog") || "[]");
+      alerts.log = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      alerts.log = [];
+    }
+  }
+
+  function alertsSaveSettings() {
+    safeStorage.set("radar:alertsEnabled", alerts.enabled ? "1" : "0");
+    safeStorage.set("radar:alertMode", alerts.mode || "");
+    safeStorage.set("radar:alertOccupants", alerts.settings.occupants ? "1" : "0");
+    safeStorage.set("radar:alertExpires", String(alerts.expiresAt || 0));
+    safeStorage.set("radar:alertNick", alerts.nick || "");
+    safeStorage.set("radar:alertLog", JSON.stringify(alerts.log.slice(0, 20)));
+  }
+
+  function alertLogAdd(text) {
+    if (!text) return;
+    alerts.log.unshift({ at: Date.now(), text: String(text).slice(0, 160) });
+    alerts.log = alerts.log.slice(0, 20);
+    safeStorage.set("radar:alertLog", JSON.stringify(alerts.log));
+    alertLogRender();
+  }
+
+  function alertLogRender() {
+    if (!els.alertLog) return;
+    els.alertLog.replaceChildren();
+    if (!alerts.log.length) {
+      els.alertLog.textContent = "Nenhum aviso ainda.";
+      return;
+    }
+    for (const entry of alerts.log.slice(0, 12)) {
+      const item = document.createElement("div");
+      item.className = "alert-log-item";
+      const time = document.createElement("span");
+      time.className = "alert-log-time";
+      time.textContent = timeOf(entry.at);
+      const text = document.createElement("span");
+      text.textContent = entry.text;
+      item.append(time, text);
+      els.alertLog.appendChild(item);
+    }
+  }
+
+  function scheduleAlertExpiry() {
+    if (alerts.expiryTimer) {
+      clearTimeout(alerts.expiryTimer);
+      alerts.expiryTimer = null;
+    }
+    if (!alerts.enabled || !alerts.expiresAt) return;
+    const wait = Math.max(0, alerts.expiresAt - Date.now()) + 1_000;
+    alerts.expiryTimer = setTimeout(() => {
+      alerts.expiryTimer = null;
+      if (alerts.expiresAt && alerts.expiresAt <= Date.now()) {
+        alerts.enabled = false;
+        alerts.mode = "";
+        alerts.subscription = null;
+        alerts.expiresAt = 0;
+        alerts.nick = "";
+        alerts.boundToBackend = false;
+        alertsSaveSettings();
+        alertsRender();
+        alertLogAdd("Alertas expiraram");
+      }
+    }, Math.min(wait, 2 ** 31 - 1));
+  }
+
+  function alertsRender() {
+    if (!els.alertsBtn) return;
+    els.alertsBtn.classList.toggle("is-on", alerts.enabled);
+    els.alertsDot?.classList.toggle("hidden", !alerts.enabled);
+
+    if (els.alertsStatus) {
+      els.alertsStatus.className = "alerts-status";
+      let kind = "";
+      let text = "Alertas desativados";
+      if (alerts.busy) {
+        kind = "is-warn";
+        text = "Ativando alertas...";
+      } else if (alerts.permission === "denied") {
+        kind = "is-error";
+        text = "Permissão de notificação negada";
+      } else if (typeof Notification === "undefined") {
+        kind = "is-warn";
+        text = "Navegador sem suporte a notificações";
+      } else if (alerts.enabled) {
+        kind = "is-active";
+        const expiry = alerts.expiresAt ? ` até ${timeOf(alerts.expiresAt)}` : "";
+        text = `Alertas ativos${expiry} · ${alerts.mode === "push" ? "push" : "aba aberta"}`;
+      }
+      if (kind) els.alertsStatus.classList.add(kind);
+      if (els.alertsStatusText) els.alertsStatusText.textContent = text;
+    }
+
+    els.enableAlertsBtn?.classList.toggle("hidden", alerts.enabled);
+    els.disableAlertsBtn?.classList.toggle("hidden", !alerts.enabled);
+    if (els.enableAlertsBtn) els.enableAlertsBtn.disabled = alerts.busy;
+    if (els.testAlertBtn) els.testAlertBtn.disabled = alerts.busy;
+    if (els.disableAlertsBtn) els.disableAlertsBtn.disabled = alerts.busy;
+    if (els.alertOccupants) els.alertOccupants.checked = alerts.settings.occupants;
+
+    if (els.alertsInfo) {
+      let info = "";
+      if (!state.currentNick) {
+        info = "Vigie um nick primeiro e ative os alertas.";
+      } else if (alerts.enabled) {
+        info =
+          alerts.mode === "push"
+            ? `Monitorando @${alerts.nick || state.currentNick}. Pode fechar o site: o push continua.`
+            : `Monitorando @${alerts.nick || state.currentNick}. Mantenha a aba aberta em segundo plano.`;
+      } else if (alerts.pushEnabled) {
+        info = `Pronto para ativar alertas para @${state.currentNick}.`;
+      } else {
+        info = "Push indisponível neste navegador; os alertas funcionam com a aba aberta.";
+      }
+      els.alertsInfo.textContent = info;
+    }
+
+    alertLogRender();
+  }
+
+  function alertsOpen() {
+    if (!els.alertsPanel || !els.alertsOverlay) return;
+    if (alerts.closeTimer) { clearTimeout(alerts.closeTimer); alerts.closeTimer = null; }
+    alertsRender();
+    els.alertsPanel.classList.remove("hidden");
+    els.alertsOverlay.classList.remove("hidden");
+    requestAnimationFrame(() => {
+      els.alertsPanel.classList.add("is-open");
+      els.alertsOverlay.classList.add("is-open");
+    });
+    document.body.style.overflow = "hidden";
+  }
+
+  function alertsClose() {
+    if (!els.alertsPanel || !els.alertsOverlay) return;
+    els.alertsPanel.classList.remove("is-open");
+    els.alertsOverlay.classList.remove("is-open");
+    document.body.style.overflow = "";
+    alerts.closeTimer = setTimeout(() => {
+      els.alertsPanel.classList.add("hidden");
+      els.alertsOverlay.classList.add("hidden");
+      alerts.closeTimer = null;
+    }, 260);
+  }
+
+  async function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return null;
+    if (alerts.registration) return alerts.registration;
+    try {
+      alerts.registration = await navigator.serviceWorker.register("sw.js");
+      return alerts.registration;
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchPushConfig() {
+    try {
+      const response = await fetch(`${HTTP_BASE}/api/push/key`, { cache: "no-store" });
+      if (!response.ok) return false;
+      const json = await response.json();
+      alerts.publicKey = String(json?.key || "");
+      alerts.pushEnabled = Boolean(json?.enabled && alerts.publicKey);
+      return alerts.pushEnabled;
+    } catch {
+      alerts.pushEnabled = false;
+      alerts.publicKey = "";
+      return false;
+    }
+  }
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (String(base64String).length % 4)) % 4);
+    const base64 = (String(base64String) + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    const output = new Uint8Array(raw.length);
+    for (let index = 0; index < raw.length; index += 1) output[index] = raw.charCodeAt(index);
+    return output;
+  }
+
+  function subscriptionKeyMatches(subscription, key) {
+    try {
+      const existing = subscription?.options?.applicationServerKey;
+      if (!existing) return true;
+      const current = new Uint8Array(existing);
+      const wanted = urlBase64ToUint8Array(key);
+      if (current.length !== wanted.length) return false;
+      for (let index = 0; index < current.length; index += 1) {
+        if (current[index] !== wanted[index]) return false;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  async function getPushSubscription() {
+    const registration = await registerServiceWorker();
+    if (!registration || !("PushManager" in window)) return null;
+    if (!alerts.publicKey) await fetchPushConfig();
+    if (!alerts.publicKey) return null;
+
+    let subscription = await registration.pushManager.getSubscription();
+    if (subscription && !subscriptionKeyMatches(subscription, alerts.publicKey)) {
+      try {
+        await subscription.unsubscribe();
+      } catch {
+        /* ignora */
+      }
+      subscription = null;
+    }
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(alerts.publicKey),
+      });
+    }
+    return subscription;
+  }
+
+  async function showLocalNotification(title, body) {
+    const registration = alerts.registration || (await registerServiceWorker());
+    if (!registration) return false;
+    try {
+      await registration.showNotification(title, {
+        body,
+        icon: "/icons/icon-192.png",
+        badge: "/icons/icon-192.png",
+        tag: `radar-local-${Date.now()}`,
+        data: { url: window.location.href },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function maybeLocalNotify(title, body) {
+    if (!alerts.enabled || alerts.mode !== "local") return;
+    if (!document.hidden) return;
+    showLocalNotification(title, body);
+  }
+
+  function wsSendWhenOpen(payload, timeout = 6_000) {
+    if (wsSend(payload)) return Promise.resolve(true);
+    connect();
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (wsSend(payload)) {
+          clearInterval(timer);
+          resolve(true);
+          return;
+        }
+        if (Date.now() - started > timeout) {
+          clearInterval(timer);
+          resolve(false);
+        }
+      }, 250);
+    });
+  }
+
+  async function sendAlertStart(nick) {
+    if (!alerts.subscription?.endpoint) return false;
+    const sent = await wsSendWhenOpen({
+      type: "alert_start",
+      nick,
+      subscription: alerts.subscription,
+      settings: { occupants: alerts.settings.occupants },
+    });
+    if (!sent) return false;
+    alerts.busy = true;
+    alertsRender();
+    if (alerts.pendingTimer) clearTimeout(alerts.pendingTimer);
+    alerts.pendingTimer = setTimeout(() => {
+      alerts.pendingTimer = null;
+      if (alerts.boundToBackend) return;
+      alerts.busy = false;
+      alertsRender();
+      toast("O servidor não confirmou os alertas", {
+        kind: "warn",
+        detail: "Tente ativar novamente.",
+      });
+    }, 20_000);
+    return true;
+  }
+
+  async function enableAlerts() {
+    if (alerts.busy) return;
+    if (!state.currentNick) {
+      alertsOpen();
+      toast("Vigie um nick primeiro", { kind: "warn", detail: "Digite o nick e clique em Vigiar." });
+      return;
+    }
+    if (typeof Notification === "undefined" || typeof Notification.requestPermission !== "function") {
+      toast("Este navegador não suporta notificações", { kind: "danger" });
+      return;
+    }
+
+    alerts.busy = true;
+    alertsRender();
+    try {
+      const permission = await Notification.requestPermission();
+      alerts.permission = permission;
+      if (permission !== "granted") {
+        toast("Permissão de notificação negada", {
+          kind: "warn",
+          detail: "Libere as notificações nas configurações do navegador.",
+        });
+        return;
+      }
+
+      const registration = await registerServiceWorker();
+      if (!registration) throw new Error("service worker indisponível");
+
+      const pushReady = await fetchPushConfig();
+      if (pushReady) {
+        const subscription = await getPushSubscription();
+        if (!subscription) throw new Error("não foi possível criar a assinatura push");
+        alerts.subscription = subscription.toJSON ? subscription.toJSON() : subscription;
+        alerts.mode = "push";
+        alerts.enabled = true;
+        alerts.nick = state.currentNick;
+        alerts.boundToBackend = false;
+        alertsSaveSettings();
+        const sent = await sendAlertStart(state.currentNick);
+        if (!sent) throw new Error("sem conexão com o servidor");
+        await showLocalNotification(
+          "Ativando alertas",
+          `Avisos de ${state.currentNick} serão enviados pelo navegador.`
+        );
+        alertLogAdd(`Ativando alertas para @${state.currentNick}`);
+      } else {
+        alerts.mode = "local";
+        alerts.enabled = true;
+        alerts.nick = state.currentNick;
+        alerts.expiresAt = Date.now() + 2 * 60 * 60 * 1000;
+        alerts.boundToBackend = false;
+        alertsSaveSettings();
+        await showLocalNotification(
+          "Alertas locais ativados",
+          "Mantenha esta aba aberta em segundo plano para receber os avisos."
+        );
+        alertLogAdd(`Alertas locais ativados para @${state.currentNick}`);
+        toast("Alertas locais ativados", {
+          kind: "success",
+          detail: "Mantenha a aba aberta (pode minimizar).",
+        });
+      }
+    } catch (error) {
+      alerts.enabled = false;
+      alerts.mode = "";
+      alerts.boundToBackend = false;
+      alerts.busy = false;
+      alertsSaveSettings();
+      toast("Falha ao ativar alertas", {
+        kind: "danger",
+        detail: error?.message || String(error),
+      });
+    } finally {
+      alerts.busy = false;
+      alertsRender();
+    }
+  }
+
+  async function disableAlerts({ silent = false } = {}) {
+    const endpoint = alerts.subscription?.endpoint || "";
+    if (endpoint) {
+      await wsSendWhenOpen({ type: "alert_stop", endpoint }, 3_000).catch(() => false);
+    }
+    try {
+      const registration = alerts.registration || (await registerServiceWorker());
+      const subscription = await registration?.pushManager?.getSubscription();
+      if (subscription) await subscription.unsubscribe();
+    } catch {
+      /* ignora */
+    }
+
+    alerts.enabled = false;
+    alerts.mode = "";
+    alerts.subscription = null;
+    alerts.expiresAt = 0;
+    alerts.nick = "";
+    alerts.boundToBackend = false;
+    alerts.busy = false;
+    if (alerts.pendingTimer) {
+      clearTimeout(alerts.pendingTimer);
+      alerts.pendingTimer = null;
+    }
+    if (alerts.expiryTimer) {
+      clearTimeout(alerts.expiryTimer);
+      alerts.expiryTimer = null;
+    }
+    alertsSaveSettings();
+    alertsRender();
+    alertLogAdd("Alertas desativados");
+    if (!silent) toast("Alertas desativados", { kind: "info" });
+  }
+
+  async function testAlerts() {
+    if (alerts.busy) return;
+    if (typeof Notification === "undefined") {
+      toast("Este navegador não suporta notificações", { kind: "danger" });
+      return;
+    }
+    let permission = Notification.permission;
+    if (permission !== "granted") permission = await Notification.requestPermission();
+    alerts.permission = permission;
+    if (permission !== "granted") {
+      toast("Permissão de notificação negada", { kind: "warn" });
+      alertsRender();
+      return;
+    }
+    const registration = await registerServiceWorker();
+    if (!registration) {
+      toast("Service worker indisponível", { kind: "danger" });
+      return;
+    }
+    await showLocalNotification("Teste de alerta", "Se você está vendo isso, as notificações estão funcionando.");
+    if (alerts.enabled && alerts.mode === "push" && alerts.subscription?.endpoint) {
+      wsSend({ type: "alert_test", endpoint: alerts.subscription.endpoint });
+    }
+    toast("Teste enviado", { kind: "success", detail: "Veja a notificação do navegador." });
+  }
+
+  async function initAlerts() {
+    alerts.permission = typeof Notification !== "undefined" ? Notification.permission : "unsupported";
+    alertsLoadSettings();
+    await fetchPushConfig().catch(() => false);
+
+    if (alerts.enabled && alerts.expiresAt && alerts.expiresAt < Date.now()) {
+      alerts.enabled = false;
+      alerts.mode = "";
+      alerts.subscription = null;
+      alerts.expiresAt = 0;
+      alerts.nick = "";
+    }
+    if (alerts.enabled && alerts.permission === "denied") {
+      alerts.enabled = false;
+      alerts.mode = "";
+      alerts.subscription = null;
+    }
+
+    const registration = await registerServiceWorker();
+    if (registration && alerts.enabled && alerts.mode === "push") {
+      try {
+        alerts.publicKey = "";
+        await fetchPushConfig();
+        const subscription = await registration.pushManager?.getSubscription();
+        if (subscription) {
+          alerts.subscription = subscription.toJSON ? subscription.toJSON() : subscription;
+        } else {
+          alerts.enabled = false;
+          alerts.mode = "";
+          alerts.subscription = null;
+        }
+      } catch {
+        alerts.enabled = false;
+        alerts.mode = "";
+        alerts.subscription = null;
+      }
+    }
+
+    alertsSaveSettings();
+    alertsRender();
+    scheduleAlertExpiry();
+  }
+
   // ---------------- mensagens do backend ----------------
 
   function handleMessage(message) {
@@ -235,6 +745,15 @@
           els.watchBtn.textContent = "Vigiar";
         }
         renderTarget();
+        alertsRender();
+        if (
+          alerts.enabled &&
+          alerts.mode === "push" &&
+          alerts.subscription?.endpoint &&
+          (!alerts.boundToBackend || alerts.nick !== (message.nick || state.currentNick))
+        ) {
+          sendAlertStart(message.nick || state.currentNick).catch(() => {});
+        }
         break;
 
       case "status":
@@ -266,6 +785,16 @@
         renderRoom();
         renderOccupants();
         setStatus("online", message.room ? `Na sala ${message.room.name}` : "Na sala");
+        if (message.room) {
+          const roomLabel = `${message.room.name || message.room.roomId}${
+            message.room.privacy === "private" ? " (privada)" : ""
+          }`;
+          alertsLogAdd(`Sala: ${roomLabel}`);
+          maybeLocalNotify(
+            "IMVU Radar",
+            `${state.target?.displayName || state.target?.username || "Alvo"} • ${roomLabel}`
+          );
+        }
         break;
       }
 
@@ -288,6 +817,8 @@
           kind: "warn",
           detail: roomName,
         });
+        alertsLogAdd(`Saiu de ${roomName}`);
+        maybeLocalNotify("IMVU Radar", `${message.nick || "Alvo"} saiu de ${roomName}`);
         break;
       }
 
@@ -303,6 +834,8 @@
           kind: "success",
           detail: person?.username ? `@${person.username} · ${timeOf(message.at)}` : timeOf(message.at),
         });
+        alertsLogAdd(`${name} entrou na sala`);
+        maybeLocalNotify("IMVU Radar", `${name} entrou na sala`);
         break;
       }
 
@@ -322,6 +855,8 @@
           kind: "danger",
           detail: message.occupant?.username ? `@${message.occupant.username} · ${timeOf(message.at)}` : timeOf(message.at),
         });
+        alertsLogAdd(`${name} saiu da sala`);
+        maybeLocalNotify("IMVU Radar", `${name} saiu da sala`);
         break;
       }
 
@@ -343,6 +878,64 @@
         state.watching = false;
         state.currentNick = "";
         resetToIdle();
+        break;
+
+      case "alert_active": {
+        if (alerts.pendingTimer) {
+          clearTimeout(alerts.pendingTimer);
+          alerts.pendingTimer = null;
+        }
+        alerts.enabled = true;
+        alerts.mode = message.mode || "push";
+        alerts.expiresAt = Number(message.expiresAt) || 0;
+        alerts.nick = message.nick || state.currentNick;
+        alerts.boundToBackend = true;
+        alerts.busy = false;
+        alertsSaveSettings();
+        scheduleAlertExpiry();
+        alertsRender();
+        toast("Alertas ativados", {
+          kind: "success",
+          detail: alerts.expiresAt ? `Até ${timeOf(alerts.expiresAt)}` : "",
+        });
+        alertLogAdd(`Alertas ativos para @${alerts.nick}`);
+        break;
+      }
+
+      case "alert_stopped":
+        alerts.enabled = false;
+        alerts.mode = "";
+        alerts.subscription = null;
+        alerts.expiresAt = 0;
+        alerts.nick = "";
+        alerts.boundToBackend = false;
+        alerts.busy = false;
+        if (alerts.pendingTimer) {
+          clearTimeout(alerts.pendingTimer);
+          alerts.pendingTimer = null;
+        }
+        alertsSaveSettings();
+        alertsRender();
+        break;
+
+      case "alert_error":
+        alerts.busy = false;
+        alerts.boundToBackend = false;
+        alerts.enabled = false;
+        alerts.mode = "";
+        alerts.expiresAt = 0;
+        alerts.nick = "";
+        if (alerts.pendingTimer) {
+          clearTimeout(alerts.pendingTimer);
+          alerts.pendingTimer = null;
+        }
+        alertsSaveSettings();
+        alertsRender();
+        toast(message.message || "Falha nos alertas", {
+          kind: "danger",
+          detail: message.code || "",
+        });
+        alertLogAdd(message.message || "Falha nos alertas");
         break;
 
       case "pong":
@@ -706,6 +1299,7 @@
     renderOccupants();
     setStatus("idle", "Aguardando");
     document.title = "IMVU Radar — presença em tempo real";
+    alertsRender();
   }
 
   function resetForWatch(nick) {
@@ -728,6 +1322,7 @@
       els.watchBtn.disabled = true;
       els.watchBtn.textContent = "Buscando...";
     }
+    alertsRender();
   }
 
   // ---------------- eventos ----------------
@@ -761,12 +1356,31 @@
     state.watching = false;
     state.currentNick = "";
     wsSend({ type: "stop" });
+    if (alerts.enabled) disableAlerts({ silent: true }).catch(() => {});
     resetToIdle();
     toast("Monitoramento parado", { kind: "info", detail: "O radar não está mais vigiando esse nick." });
   });
 
   els.copyRoomBtn?.addEventListener("click", () => {
     copyText(els.copyRoomBtn.dataset.link || "", "Link copiado");
+  });
+
+  els.alertsBtn?.addEventListener("click", alertsOpen);
+  els.closeAlertsBtn?.addEventListener("click", alertsClose);
+  els.alertsOverlay?.addEventListener("click", alertsClose);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") alertsClose();
+  });
+  els.enableAlertsBtn?.addEventListener("click", enableAlerts);
+  els.disableAlertsBtn?.addEventListener("click", () => disableAlerts());
+  els.testAlertBtn?.addEventListener("click", testAlerts);
+  els.alertOccupants?.addEventListener("change", () => {
+    alerts.settings.occupants = Boolean(els.alertOccupants.checked);
+    alertsSaveSettings();
+    alertsRender();
+    if (alerts.enabled && alerts.mode === "push" && alerts.subscription?.endpoint && state.currentNick) {
+      sendAlertStart(state.currentNick).catch(() => {});
+    }
   });
 
   // Enter no input já usa o form. Botão "Parar" fica oculto até vigiar.
@@ -792,6 +1406,7 @@
   }
 
   connect();
+  initAlerts().catch(() => {});
 
   setInterval(() => {
     if (state.connected) {
@@ -801,3 +1416,4 @@
     }
   }, 25_000);
 })();
+

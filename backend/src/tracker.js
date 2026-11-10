@@ -6,6 +6,7 @@ import {
   watchRoom as catvuWatch,
   catvuPerson,
 } from "./catvu.js";
+import { sendPush, pushAvailable } from "./push.js";
 
 const envInt = (name, fallback) => {
   const value = Number(process.env[name]);
@@ -20,6 +21,9 @@ const TARGET_ROOM_SCAN = envInt("TARGET_ROOM_SCAN", 800);
 const PROBE_INTERVAL_MS = envInt("PROBE_INTERVAL_MS", 15_000);
 const PROBE_TIMEOUT_MS = envInt("PROBE_TIMEOUT_MS", 12_000);
 const ROOM_REFRESH_MS = envInt("ROOM_REFRESH_MS", 20_000);
+const ALERT_TTL_MS = envInt("ALERT_TTL_MS", 2 * 60 * 60 * 1000);
+const MAX_ALERTS = envInt("MAX_ALERTS", 30);
+const SITE_URL = String(process.env.SITE_URL || "https://imvu-radar-web.netlify.app").replace(/\/+$/, "");
 
 const now = () => Date.now();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,6 +50,7 @@ export class RadarTracker {
     this.api = new ImvuApi({ username, password, log });
     this.tracks = new Map();
     this.roomRefs = new Map();
+    this.alerts = new Map();
     this.imqStarted = false;
 
     this.imq = new ImqClient({
@@ -153,6 +158,7 @@ export class RadarTracker {
       profile,
       nick: profile.username,
       watchers: new Set(),
+      alerts: new Map(),
       room: null,
       occupants: new Map(),
       state: "loading",
@@ -220,7 +226,7 @@ export class RadarTracker {
       return;
     }
     track.watchers.delete(client);
-    if (track.watchers.size === 0) {
+    if (track.watchers.size === 0 && track.alerts.size === 0) {
       this.destroyTrack(track);
     }
     if (!silent) client.send({ type: "stopped" });
@@ -229,6 +235,11 @@ export class RadarTracker {
   destroyTrack(track) {
     this.clearTrackTimers(track);
     this.stopCatvuWatch(track);
+    for (const alert of [...track.alerts.values()]) {
+      if (alert.timer) clearTimeout(alert.timer);
+      this.alerts.delete(alert.endpoint);
+    }
+    track.alerts.clear();
     if (track.room) this.releaseRoom(track.room.roomId);
     this.imq.removeTarget(track.cid);
     this.tracks.delete(track.cid);
@@ -250,6 +261,10 @@ export class RadarTracker {
 
   destroy() {
     for (const track of [...this.tracks.values()]) this.destroyTrack(track);
+    for (const alert of this.alerts.values()) {
+      if (alert.timer) clearTimeout(alert.timer);
+    }
+    this.alerts.clear();
     this.imq.stop();
   }
 
@@ -650,6 +665,7 @@ export class RadarTracker {
     }
     this.acquireRoom(rid);
 
+    const previousRoom = track.room;
     track.room = room;
     track.detectedBy = via;
     track.occupants = this.buildOccupants(track, people);
@@ -673,6 +689,14 @@ export class RadarTracker {
     this.broadcast(track, this.roomMessage(track));
     this.broadcast(track, this.statusMessage(track, "online", `Na sala ${room.name}`));
     this.log.info(`[tracker] ${track.nick} -> ${room.name} (${rid}) via ${via}`);
+
+    if (track.alerts.size) {
+      this.pushTrack(track, {
+        title: previousRoom?.roomId && previousRoom.roomId !== rid ? "Mudou de sala" : "Está na sala",
+        body: `${track.profile.displayName || track.nick} • ${room.name}${room.privacy === "private" ? " (privada)" : ""}`,
+        tag: `room-${rid}`,
+      });
+    }
   }
 
   mergeOccupant(previous, incoming) {
@@ -702,6 +726,14 @@ export class RadarTracker {
       total: track.occupants.size,
       at: now(),
     });
+    if (track.alerts.size) {
+      this.pushTrack(track, {
+        title: "Entrou na sala",
+        body: `${person.displayName || person.username} entrou em ${track.room?.name || "sala"}`,
+        tag: `join-${person.cid}-${now()}`,
+        occupants: true,
+      });
+    }
   }
 
   emitOccupantLeave(track, person) {
@@ -716,6 +748,14 @@ export class RadarTracker {
       total: track.occupants.size,
       at: now(),
     });
+    if (track.alerts.size) {
+      this.pushTrack(track, {
+        title: "Saiu da sala",
+        body: `${person.displayName || person.username} saiu de ${track.room?.name || "sala"}`,
+        tag: `leave-${person.cid}-${now()}`,
+        occupants: true,
+      });
+    }
   }
 
   /**
@@ -960,6 +1000,13 @@ export class RadarTracker {
       at: now(),
     });
     this.broadcast(track, this.statusMessage(track, "offline", track.statusMsg));
+    if (track.alerts.size) {
+      this.pushTrack(track, {
+        title: "Saiu da sala",
+        body: `${track.profile.displayName || track.nick} saiu de ${oldRoom.name}`,
+        tag: `left-${oldRoom.roomId}`,
+      });
+    }
 
     // Pode ter trocado de sala direto; uma sondagem curta resolve.
     setTimeout(() => {
@@ -1153,6 +1200,164 @@ export class RadarTracker {
     }, 450);
   }
 
+  // ---------------- alertas Web Push ----------------
+
+  validSubscription(subscription) {
+    const endpoint = String(subscription?.endpoint || "");
+    return (
+      endpoint.startsWith("https://") &&
+      endpoint.length < 1_200 &&
+      typeof subscription?.keys?.p256dh === "string" &&
+      subscription.keys.p256dh.length > 20 &&
+      typeof subscription?.keys?.auth === "string" &&
+      subscription.keys.auth.length > 5
+    );
+  }
+
+  alertUrl(track) {
+    return `${SITE_URL}/?nick=${encodeURIComponent(track.profile.username || track.nick)}`;
+  }
+
+  sendPushToAlert(alert, payload) {
+    if (!pushAvailable() || !alert || alert.expiresAt <= now()) return;
+    const body = {
+      title: payload.title || "IMVU Radar",
+      body: payload.body || "",
+      tag: payload.tag || `imvu-radar-${alert.track.cid}`,
+      url: this.alertUrl(alert.track),
+      icon: "/icons/icon-192.png",
+    };
+    sendPush(alert.subscription, body).catch((error) => {
+      if (error?.statusCode === 404 || error?.statusCode === 410) {
+        this.removeAlert(alert);
+        return;
+      }
+      this.log.warn(`[push] falha ${error?.statusCode || ""}: ${error?.message || error}`);
+    });
+  }
+
+  pushTrack(track, payload) {
+    if (!pushAvailable() || !track.alerts?.size) return;
+    for (const alert of [...track.alerts.values()]) {
+      if (payload.occupants && !alert.settings.occupants) continue;
+      this.sendPushToAlert(alert, payload);
+    }
+  }
+
+  removeAlert(alert, { destroyIfEmpty = true } = {}) {
+    if (!alert) return;
+    if (alert.timer) clearTimeout(alert.timer);
+    if (alert.welcomeTimer) clearTimeout(alert.welcomeTimer);
+    this.alerts.delete(alert.endpoint);
+    alert.track.alerts.delete(alert.endpoint);
+    if (destroyIfEmpty && alert.track.watchers.size === 0 && alert.track.alerts.size === 0) {
+      this.destroyTrack(alert.track);
+    }
+  }
+
+  expireAlert(alert) {
+    if (!this.alerts.has(alert.endpoint)) return;
+    this.sendPushToAlert(alert, {
+      title: "Alertas expiraram",
+      body: `Os alertas de ${alert.track.profile.displayName || alert.track.nick} terminaram. Ative de novo no site.`,
+      tag: `alert-expired-${alert.track.cid}`,
+    });
+    this.removeAlert(alert);
+  }
+
+  async startAlert(message) {
+    const nick = safeNick(message?.nick);
+    const subscription = message?.subscription;
+    const settings = { occupants: Boolean(message?.settings?.occupants) };
+    if (!nick) throw new Error("nick obrigatorio");
+    if (!this.validSubscription(subscription)) throw new Error("subscription invalida");
+    if (!pushAvailable()) throw new Error("push nao configurado no servidor");
+
+    const endpoint = subscription.endpoint;
+    const existing = this.alerts.get(endpoint);
+    if (existing) this.removeAlert(existing, { destroyIfEmpty: false });
+    if (!existing && this.alerts.size >= MAX_ALERTS) {
+      throw new Error("limite de alertas atingido");
+    }
+
+    const logged = await this.ensureLogin();
+    if (!logged) throw new Error(this.api.lastError || "falha no login do IMVU");
+    const profile = await this.api.resolve(nick);
+    if (!profile) throw new Error(`nick "${nick}" nao encontrado`);
+
+    let track = this.tracks.get(profile.cid);
+    const isNewTrack = !track;
+    if (!track) {
+      track = this.createTrack(profile);
+      this.tracks.set(profile.cid, track);
+    }
+
+    const alert = {
+      endpoint,
+      subscription,
+      settings,
+      track,
+      createdAt: now(),
+      expiresAt: now() + ALERT_TTL_MS,
+      timer: null,
+      welcomeTimer: null,
+    };
+    track.alerts.set(endpoint, alert);
+    this.alerts.set(endpoint, alert);
+    alert.timer = setTimeout(() => this.expireAlert(alert), ALERT_TTL_MS);
+
+    if (isNewTrack) {
+      this.imq.addTarget(profile.cid);
+      this.startTimers(track);
+      this.startSync(track);
+    }
+
+    if (track.room) {
+      this.sendPushToAlert(alert, {
+        title: "Sala atual",
+        body: `${track.profile.displayName || track.nick} • ${track.room.name}${track.room.privacy === "private" ? " (privada)" : ""}`,
+        tag: `room-${track.room.roomId}`,
+      });
+    } else {
+      alert.welcomeTimer = setTimeout(() => {
+        if (!this.alerts.has(endpoint) || track.room) return;
+        this.sendPushToAlert(alert, {
+          title: "Alertas ativados",
+          body: `Vigiando ${track.profile.displayName || track.nick}. Aviso quando entrar em uma sala.`,
+          tag: `alert-on-${track.cid}`,
+        });
+      }, 6_000);
+    }
+
+    this.log.info(`[push] alerta ativado para ${track.nick} (${track.cid}) expira em ${Math.round(ALERT_TTL_MS / 60_000)}min`);
+    return {
+      nick: track.profile.username || track.nick,
+      displayName: track.profile.displayName || track.nick,
+      cid: track.cid,
+      expiresAt: alert.expiresAt,
+      mode: "push",
+    };
+  }
+
+  stopAlert(message) {
+    const endpoint = String(message?.endpoint || "");
+    if (!endpoint) return;
+    const alert = this.alerts.get(endpoint);
+    if (alert) this.removeAlert(alert);
+  }
+
+  testAlert(message) {
+    const endpoint = String(message?.endpoint || "");
+    if (!endpoint) return;
+    const alert = this.alerts.get(endpoint);
+    if (!alert) return;
+    this.sendPushToAlert(alert, {
+      title: "Teste de alerta",
+      body: "Se você recebeu esta notificação, o push está funcionando.",
+      tag: `test-${now()}`,
+    });
+  }
+
   stats() {
     let watchers = 0;
     for (const track of this.tracks.values()) watchers += track.watchers.size;
@@ -1162,6 +1367,7 @@ export class RadarTracker {
       botCid: this.api.cid || "",
       tracks: this.tracks.size,
       watchers,
+      alerts: this.alerts.size,
       rooms: this.roomRefs.size,
       lastError: this.api.lastError,
     };

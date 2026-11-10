@@ -15,6 +15,8 @@
       rel="stylesheet"
     />
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#06060b" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body class="min-h-screen text-slate-100 antialiased">
@@ -39,14 +41,28 @@
         </div>
       </div>
 
-      <div id="connection" class="conn conn-offline" title="Conexão com o backend">
-        <span class="conn-dot"></span>
-        <span id="connectionText">conectando</span>
+      <div class="flex items-center gap-2">
+        <button id="alertsBtn" class="bell-btn" type="button" aria-label="Abrir alertas" title="Alertas">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linejoin="round"
+            />
+            <path d="M10 21h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+          </svg>
+          <span id="alertsDot" class="bell-dot hidden"></span>
+        </button>
+        <div id="connection" class="conn conn-offline" title="Conexão com o backend">
+          <span class="conn-dot"></span>
+          <span id="connectionText">conectando</span>
+        </div>
       </div>
     </header>
 
     <main class="relative z-10 mx-auto max-w-6xl px-5 pb-16">
-      <section class="pb-8 pt-12 text-center sm:pt-16">
+      <section id="hero" class="pb-8 pt-12 text-center sm:pt-16">
         <span class="eyebrow">API REST + IMQ WebSocket · IMVU Next</span>
         <h1 class="font-display mx-auto mt-4 max-w-3xl text-4xl font-bold leading-[1.05] tracking-tight sm:text-5xl">
           Descubra onde qualquer nick está
@@ -82,7 +98,7 @@
         </p>
       </section>
 
-      <section class="grid gap-4 lg:grid-cols-[1fr_1.35fr]">
+      <section id="mainCards" class="grid gap-4 lg:grid-cols-[1fr_1.35fr]">
         <article class="card p-5">
           <div class="flex items-start justify-between gap-3">
             <div class="eyebrow-sm">Alvo</div>
@@ -106,7 +122,7 @@
                 <p id="targetCid" class="mono mt-1 text-[11px] text-slate-500">cid —</p>
               </div>
             </div>
-            <div class="mt-5 grid grid-cols-2 gap-2">
+            <div id="targetStats" class="mt-5 grid grid-cols-2 gap-2">
               <div class="stat">
                 <span>Status no IMVU</span>
                 <strong id="targetOnline">—</strong>
@@ -162,13 +178,13 @@
                 <span id="roomOccupancy">—</span>
               </div>
 
-              <div class="mt-4 flex flex-wrap gap-2">
+              <div id="roomActions" class="mt-4 flex flex-wrap gap-2">
                 <a id="roomImvuLink" class="btn-primary" href="#" rel="noopener">Abrir no IMVU</a>
                 <a id="roomWebLink" class="btn-ghost" href="#" target="_blank" rel="noopener">Abrir na web</a>
                 <button id="copyRoomBtn" class="btn-ghost" type="button">Copiar link</button>
               </div>
 
-              <div class="mt-4 rounded-xl border border-white/5 bg-black/20 p-3">
+              <div id="roomDirectBox" class="mt-4 rounded-xl border border-white/5 bg-black/20 p-3">
                 <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Link direto</div>
                 <div id="roomDirect" class="mono mt-1 break-all text-xs text-violet-300">—</div>
               </div>
@@ -192,11 +208,55 @@
         </div>
       </section>
 
-      <footer class="mt-8 flex flex-col items-center justify-between gap-2 border-t border-white/5 pt-5 text-[11px] text-slate-600 sm:flex-row">
+      <footer id="mainFooter" class="mt-8 flex flex-col items-center justify-between gap-2 border-t border-white/5 pt-5 text-[11px] text-slate-600 sm:flex-row">
         <span>Dados via api.imvu.com e wss-imq.imvu.com</span>
         <span class="mono">IMVU Radar Web · v1.0.0</span>
       </footer>
     </main>
+
+    <div id="alertsOverlay" class="sheet-overlay hidden"></div>
+    <aside id="alertsPanel" class="alerts-panel hidden" aria-hidden="true" aria-label="Alertas">
+      <div class="alerts-head">
+        <div>
+          <div class="eyebrow-sm">Notificações</div>
+          <h2 class="font-display text-xl font-semibold">Alertas</h2>
+        </div>
+        <button id="closeAlertsBtn" class="panel-close" type="button" aria-label="Fechar">×</button>
+      </div>
+
+      <p class="alerts-desc">
+        Receba aviso quando o alvo entrar, sair ou trocar de sala. Com Web Push ativo, o aviso chega
+        mesmo se você fechar esta aba.
+      </p>
+
+      <div id="alertsStatus" class="alerts-status">
+        <span class="alerts-status-dot"></span>
+        <span id="alertsStatusText">Alertas desativados</span>
+      </div>
+
+      <div class="alerts-actions">
+        <button id="enableAlertsBtn" class="btn-primary w-full" type="button">Ativar alertas</button>
+        <button id="testAlertBtn" class="btn-ghost w-full" type="button">Testar notificação</button>
+        <button id="disableAlertsBtn" class="btn-ghost w-full hidden" type="button">Desativar alertas</button>
+      </div>
+
+      <label class="alert-toggle">
+        <input id="alertOccupants" type="checkbox" />
+        <span>Avisar também quando alguém entrar ou sair da sala</span>
+      </label>
+
+      <div id="alertsInfo" class="alerts-info">Vigie um nick primeiro e ative os alertas.</div>
+
+      <div class="alerts-log">
+        <div class="eyebrow-sm">Últimos avisos</div>
+        <div id="alertLog" class="alerts-log-list">Nenhum aviso ainda.</div>
+      </div>
+
+      <p class="alerts-note">
+        Android/desktop: push pelo navegador. iPhone: instale o site na tela inicial (iOS 16.4+).
+        Se o servidor reiniciar, reative os alertas.
+      </p>
+    </aside>
 
     <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 

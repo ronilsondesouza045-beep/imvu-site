@@ -7,6 +7,7 @@ import cors from "cors";
 import { WebSocket, WebSocketServer } from "ws";
 import { RadarTracker } from "./src/tracker.js";
 import { safeNick } from "./src/imvu.js";
+import { pushAvailable, pushPublicKey } from "./src/push.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -81,6 +82,10 @@ app.get("/api/resolve", async (req, res) => {
   }
 });
 
+app.get("/api/push/key", (_req, res) => {
+  res.json({ enabled: pushAvailable(), key: pushPublicKey() });
+});
+
 app.get("/api/avatar", async (req, res) => {
   const url = String(req.query.u || "");
   if (!url) {
@@ -122,6 +127,7 @@ wss.on("connection", (ws, req) => {
     track: null,
     watchGen: 0,
     lastWatchAt: 0,
+    lastAlertAt: 0,
     ip: String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || ""),
     send(payload) {
       if (ws.readyState !== WebSocket.OPEN) return false;
@@ -197,6 +203,32 @@ wss.on("connection", (ws, req) => {
         }
         break;
       }
+      case "alert_start": {
+        const at = Date.now();
+        if (at - client.lastAlertAt < 3_000) {
+          client.send({ type: "alert_error", code: "rate_limit", message: "Aguarde um instante para alterar os alertas." });
+          break;
+        }
+        client.lastAlertAt = at;
+        try {
+          const result = await tracker.startAlert(message);
+          client.send({ type: "alert_active", ...result, at: Date.now() });
+        } catch (error) {
+          client.send({
+            type: "alert_error",
+            code: "alert_failed",
+            message: error?.message || "Falha ao ativar os alertas.",
+          });
+        }
+        break;
+      }
+      case "alert_stop":
+        tracker.stopAlert(message);
+        client.send({ type: "alert_stopped", at: Date.now() });
+        break;
+      case "alert_test":
+        tracker.testAlert(message);
+        break;
       case "stop":
         tracker.unwatch(client);
         break;
