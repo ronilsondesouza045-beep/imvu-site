@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import ffmpegPath from "ffmpeg-static";
 import play from "play-dl";
@@ -174,19 +175,33 @@ function openYtDlp(url) {
     { stdio: ["ignore", "pipe", "pipe"] }
   );
 
+  let stderr = "";
   child.stderr?.on("data", (chunk) => {
-    const line = chunk.toString();
-    if (/error|ERROR|private|unavailable|sign in/i.test(line)) {
-      console.warn(`[song] yt-dlp: ${line.slice(0, 300).trim()}`);
+    stderr += chunk;
+    if (stderr.length > 8_000) stderr = stderr.slice(-8_000);
+  });
+
+  const stream = new PassThrough();
+  child.stdout.pipe(stream);
+  child.on("error", (error) => stream.destroy(error));
+  child.on("close", (code) => {
+    if (code !== 0) {
+      const reason = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" | ");
+      stream.destroy(new Error(reason || `yt-dlp terminou com código ${code}`));
     }
   });
 
   return {
     kind: "yt-dlp",
-    stream: child.stdout,
+    stream,
     kill() {
       try {
         child.kill("SIGKILL");
+      } catch {
+        /* ignora */
+      }
+      try {
+        stream.destroy();
       } catch {
         /* ignora */
       }
@@ -284,9 +299,21 @@ export async function openMp3Stream(song) {
     { stdio: ["pipe", "pipe", "pipe"] }
   );
 
+  const mp3 = new PassThrough();
+  ffmpeg.stdout.pipe(mp3);
+  ffmpeg.on("error", (error) => {
+    console.warn(`[song] ffmpeg não iniciou: ${error?.message || error}`);
+    mp3.destroy(error);
+  });
+
   source.stream.on("error", (error) => {
     console.warn(`[song] fonte ${source.kind} falhou: ${error?.message || error}`);
-    ffmpeg.stdin.destroy(error);
+    try {
+      ffmpeg.stdin.destroy(error);
+    } catch {
+      /* ignora */
+    }
+    mp3.destroy(error);
   });
   source.stream.pipe(ffmpeg.stdin);
 
@@ -299,11 +326,16 @@ export async function openMp3Stream(song) {
     kind: source.kind,
     process: ffmpeg,
     source,
-    stream: ffmpeg.stdout,
+    stream: mp3,
     kill() {
       source.kill();
       try {
         ffmpeg.kill("SIGKILL");
+      } catch {
+        /* ignora */
+      }
+      try {
+        mp3.destroy();
       } catch {
         /* ignora */
       }
