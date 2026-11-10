@@ -262,7 +262,7 @@ Abaixo de 640px o site muda para um layout compacto: hero curto, cards de alvo/s
 
 O site ganhou a aba **🎧 Rádio para Sala**, agora com fila e busca livre no YouTube. O bot usa `@imvu/client` e `@imvu/imq` para logar, entrar na sala, ouvir o chat e responder aos comandos.
 
-**Admin é obrigatório para trocar o áudio automaticamente.** O IMVU só deixa Host/Admin alterar o `media_player` `web_radio` da sala. No IMVU: **configurações da sala > Permissões > adicione o nick do bot como Admin**. Se a troca não for confirmada, o bot manda no chat `⚠️ Preciso ser Admin...` com o link do stream MP3; copie esse link em **Media > Radio Streaming > Load**. O site mostra o mesmo aviso em destaque.
+**Admin é obrigatório para trocar o áudio automaticamente.** O IMVU só deixa Host/Admin (ou a conta dona da sala) alterar o `media_player` `web_radio`; **Moderador não basta** — o servidor devolve `not_allowed_to_perform_operation`/`Not authorized` para moderador. No IMVU: **configurações da sala > Permissões > adicione o nick do bot como Admin**. Se a troca não for confirmada, o bot manda no chat `⚠️ Preciso ser Admin...` com o link do stream MP3; copie esse link em **Media > Radio Streaming > Load**. O site mostra o mesmo aviso em destaque.
 
 **Fila por sala.** Cada `!play` adiciona uma música à fila e o bot toca uma de cada vez. `!skip` pula para a próxima e `!stop` limpa a fila e para. O backend mantém um stream MP3 contínuo por sala em `/api/radio/<sala>/<token>.mp3`; o áudio do YouTube é extraído pelo `yt-dlp` e convertido em MP3 128 kbps pelo `ffmpeg-static`. O link do YouTube em si não é MP3 nem contínuo, por isso o proxy é necessário.
 

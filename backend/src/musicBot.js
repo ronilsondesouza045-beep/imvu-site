@@ -521,8 +521,32 @@ class MusicBot {
       }
     }
 
+    const hints = [];
+    try {
+      const moderators = await room.moderators();
+      if (moderators.some((user) => String(user.id) === String(client.rest.cid))) {
+        hints.push(
+          "O bot está como Moderador; o IMVU exige Admin/Host (ou a conta dona da sala) para o media_player."
+        );
+      }
+    } catch {
+      /* a checagem de role é só um diagnóstico */
+    }
+    try {
+      const me = await client.resource(
+        `https://api.imvu.com/user/user-${client.rest.cid}`
+      );
+      if (me?.data && me.data.is_email_verified === false) {
+        hints.push("A conta do bot está com e-mail não verificado (Guest); verifique a conta.");
+      }
+    } catch {
+      /* ignora */
+    }
+
     throw new Error(
-      "O IMVU não confirmou a troca do media_player. O bot precisa ser Host/Admin da sala."
+      `O IMVU não confirmou a troca do media_player.${
+        hints.length ? ` ${hints.join(" ")}` : " O bot precisa ser Admin/Host da sala."
+      }`
     );
   }
 
