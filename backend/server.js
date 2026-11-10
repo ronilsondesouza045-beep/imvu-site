@@ -154,6 +154,33 @@ app.post("/api/bot/leave", async (req, res) => {
   }
 });
 
+// Temporario: testa join usando a sessao viva do rastreador (sem segundo login).
+app.post("/api/dev/tracker-room", async (req, res) => {
+  if (req.headers["x-dev-token"] !== "radar-test-2026") {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  const action = req.body?.action === "leave" ? "leave" : "enter";
+  const rid = String(req.body?.rid || "");
+  if (!/^\d+-\d+$/.test(rid)) {
+    res.status(400).json({ error: "rid invalido" });
+    return;
+  }
+  const logged = await tracker.ensureLogin();
+  if (!logged) {
+    res.status(503).json({ error: tracker.api.lastError || "login falhou" });
+    return;
+  }
+  const result =
+    action === "leave" ? await tracker.api.leaveRoom(rid) : await tracker.api.enterRoom(rid);
+  res.json({
+    ok: Boolean(result?.status >= 200 && result?.status < 300),
+    action,
+    status: result?.status || 0,
+    body: String(result?.text || "").slice(0, 800),
+  });
+});
+
 app.get("/api/avatar", async (req, res) => {
   const url = String(req.query.u || "");
   if (!url) {
