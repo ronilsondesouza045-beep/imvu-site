@@ -223,6 +223,12 @@ class MusicBot {
       this.sendChat("🎧 DJ Bot conectado! Digite !play, !skip ou !stop no chat.").catch(() => {});
       return this.status();
     } catch (error) {
+      const apiCode = String(error?.apiCode || error?.response?.error || "");
+      if (apiCode === "CHAT_PARTICIPANT-011") {
+        this.lastError =
+          "O IMVU recusou a entrada (CHAT_PARTICIPANT-011). Use uma conta registrada (não Guest) e uma sala que permita o bot.";
+        throw new Error(this.lastError);
+      }
       this.lastError = error?.message || String(error);
       throw error;
     } finally {
