@@ -1,4 +1,7 @@
-import webpush from "web-push";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const webpush = require("web-push");
 
 const publicKey = String(process.env.VAPID_PUBLIC_KEY || "");
 const privateKey = String(process.env.VAPID_PRIVATE_KEY || "");
