@@ -126,18 +126,26 @@ TARGET_ROOM_SCAN=800
 OWN_ROOM_SCAN=120
 CATVU_RETRY_MS=20000
 
-# Music Bot (conta separada)
+# Music Bot (conta separada; para usar a conta do rastreador, BOT_ALLOW_SAME_ACCOUNT=1)
 BOT_EMAIL=seu_email_do_bot@gmail.com
 BOT_PASSWORD=sua_senha_do_bot
 BOT_USERNAME=nome_do_bot
+BOT_ALLOW_SAME_ACCOUNT=0
 BOT_SEND_INTERVAL_MS=1500
+# URL publica do backend para o stream MP3 (no Render, RENDER_EXTERNAL_URL e automatica)
+PUBLIC_BASE_URL=https://seu-backend.onrender.com
+# Segredo do token do stream (opcional; se vazio, aleatorio por processo)
+RADIO_SECRET=
 ```
 
 | Variável | Para que serve |
 |---|---|
 | `IMVU_USER` / `IMVU_PASS` | conta usada pelo rastreador para login e IMQ |
-| `BOT_EMAIL` / `BOT_USERNAME` / `BOT_PASSWORD` | conta do bot de rádio (use uma conta separada do rastreador) |
+| `BOT_EMAIL` / `BOT_USERNAME` / `BOT_PASSWORD` | conta do bot de rádio (recomendado: separada do rastreador) |
+| `BOT_ALLOW_SAME_ACCOUNT` | `1` permite reutilizar a conta do rastreador no bot; padrão `0` (bloqueia) |
 | `BOT_SEND_INTERVAL_MS` | intervalo mínimo entre mensagens do bot (padrão 1500 ms) |
+| `PUBLIC_BASE_URL` | URL pública do backend usada no stream MP3; no Render, `RENDER_EXTERNAL_URL` é usada automaticamente |
+| `RADIO_SECRET` | segredo do token do stream (opcional; sem ele, o token é aleatório por processo) |
 | `CORS_ORIGIN` | `*` ou lista de origens separadas por vírgula |
 | `MAX_WATCHERS` | limite de navegadores vigiando ao mesmo tempo |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | chaves Web Push (gere com `npx web-push generate-vapid-keys --json`) |
@@ -152,7 +160,7 @@ BOT_SEND_INTERVAL_MS=1500
 | `PROBE_TIMEOUT_MS` | timeout do probe (padrão 12000) |
 | `ROOM_REFRESH_MS` | atualização periódica do roster (padrão 20000) |
 
-A conta em `IMVU_USER` precisa existir e conseguir logar na API. Use uma conta dedicada; nunca coloque as credenciais no frontend. A conta do bot (`BOT_*`) deve ser **outra** conta, com permissão para entrar na sala onde o DJ vai tocar.
+A conta em `IMVU_USER` precisa existir e conseguir logar na API. Use uma conta dedicada; nunca coloque as credenciais no frontend. A conta do bot (`BOT_*`) deve ser, de preferência, **outra** conta, com permissão para entrar na sala onde o DJ vai tocar e ser **Admin** dela. Para reutilizar a conta do rastreador, veja `BOT_ALLOW_SAME_ACCOUNT` na seção do Music Bot.
 
 ---
 
@@ -250,13 +258,15 @@ O backend guarda as assinaturas em memória. Se o Render reiniciar, reative os a
 
 Abaixo de 640px o site muda para um layout compacto: hero curto, cards de alvo/sala lado a lado, ocupantes em 3 colunas e painel de alertas como bottom sheet. Tudo cabe na tela do celular sem precisar descer para ver sala e ocupantes.
 
-### Music Bot / Rádio para Sala
+### Music Bot / DJ para Sala
 
-O site ganhou a aba **🎧 Rádio para Sala**, com um módulo separado do rastreador. O bot usa `@imvu/client` e `@imvu/imq` para logar, entrar na sala, ouvir o chat e responder aos comandos.
+O site ganhou a aba **🎧 Rádio para Sala**, agora com fila e busca livre no YouTube. O bot usa `@imvu/client` e `@imvu/imq` para logar, entrar na sala, ouvir o chat e responder aos comandos.
 
-**Conta separada é obrigatória.** O bot precisa de uma conta IMVU diferente de `IMVU_USER` (a conta do rastreador). Se as duas usarem a mesma conta, o login do bot pode derrubar a sessão do radar.
+**Admin é obrigatório para trocar o áudio automaticamente.** O IMVU só deixa Host/Admin alterar o `media_player` `web_radio` da sala. No IMVU: **configurações da sala > Permissões > adicione o nick do bot como Admin**. Se a troca não for confirmada, o bot manda no chat `⚠️ Preciso ser Admin...` com o link do stream MP3; copie esse link em **Media > Radio Streaming > Load**. O site mostra o mesmo aviso em destaque.
 
-A conta do bot também precisa ser **registrada** (username sem `Guest_`). Contas Guest/recém-criadas costumam ser recusadas pelo IMVU no join com `CHAT_PARTICIPANT-011`, mesmo em salas públicas abertas. Complete o cadastro/verificação da conta ou use outra conta registrada e atualize `BOT_USERNAME`.
+**Fila por sala.** Cada `!play` adiciona uma música à fila e o bot toca uma de cada vez. `!skip` pula para a próxima e `!stop` limpa a fila e para. O backend mantém um stream MP3 contínuo por sala em `/api/radio/<sala>/<token>.mp3`; o áudio do YouTube é extraído pelo `yt-dlp` e convertido em MP3 128 kbps pelo `ffmpeg-static`. O link do YouTube em si não é MP3 nem contínuo, por isso o proxy é necessário.
+
+**Conta:** recomendado usar uma conta separada do rastreador. Para reutilizar a conta do rastreador, defina `BOT_ALLOW_SAME_ACCOUNT=1` e use as mesmas `BOT_USERNAME`/`BOT_PASSWORD` de `IMVU_USER`/`IMVU_PASS`. No teste com `tropinha1` o radar continuou `loggedIn/IMQ ready` e o bot ficou na sala `The Penthouse`; o painel mostra o aviso de conta compartilhada. A conta precisa ser registrada/antiga: a Guest nova `VUmusic` foi recusada no join com `CHAT_PARTICIPANT-011`; a `tropinha1` entrou.
 
 Configuração em `backend/.env`:
 
@@ -264,30 +274,36 @@ Configuração em `backend/.env`:
 BOT_EMAIL=seu_email_do_bot@gmail.com
 BOT_PASSWORD=sua_senha_do_bot
 BOT_USERNAME=nome_do_bot
+BOT_ALLOW_SAME_ACCOUNT=0
 BOT_SEND_INTERVAL_MS=1500
+PUBLIC_BASE_URL=https://seu-backend.onrender.com
+RADIO_SECRET=uma_string_longa_opcional
 ```
 
-No Render, adicione essas mesmas variáveis em **Environment** (a `.env` local não sobe para o deploy). Sem elas, a aba mostra **Bot não configurado** e o endpoint retorna 503.
+No Render, adicione essas variáveis em **Environment**. O `RENDER_EXTERNAL_URL` é automático e usado como base do stream quando `PUBLIC_BASE_URL` não está definido. No deploy atual o bot está com a conta do rastreador (`BOT_USERNAME=tropinha1`, `BOT_ALLOW_SAME_ACCOUNT=1`).
 
 **Dependências e execução:**
 
 ```powershell
 cd C:\Users\ronis\Desktop\imvu-site\backend
-npm install @imvu/client @imvu/imq dotenv
+npm install
+# as libs novas: ytdl-core, play-dl e ffmpeg-static
 node server.js
 ```
 
+O `postinstall` baixa o binário standalone do `yt-dlp` em `backend/bin` (Windows/Linux) e o `ffmpeg-static` baixa o `ffmpeg`. O `yt-dlp` é o extrator principal; `play-dl` e `ytdl-core` ficam como fallback. Em servidor/datacenter o YouTube pode bloquear a extração; nesse caso o bot avisa no chat e o site mostra o erro.
+
 **Como usar:**
 
-1. Abra o site e clique na aba **🎧 Rádio para Sala**.
-2. Cole o ID da sua sala (ex.: `391509865-1`) e clique em **Ativar DJ Bot**.
-3. Dentro do chat da sala, digite:
-   - `!play` — o bot responde `🎵 Tocando agora: [rádio]` e manda o link;
-   - `!skip` — troca para a próxima rádio da lista;
-   - `!stop` — avisa no chat, para e sai da sala.
-4. O botão **Desconectar bot** chama `POST /api/bot/leave` e encerra a sessão do bot.
+1. Abra o site, aba **🎧 Rádio para Sala**, cole o ID da sala e clique em **Ativar DJ Bot**.
+2. Dê **Admin** ao nick do bot na sala.
+3. Peça **qualquer música** no campo **Pedir música** do site ou no chat:
+   - `!play Michael Jackson - Billie Jean` — busca no YouTube e adiciona à fila;
+   - `!skip` — pula para a próxima da fila;
+   - `!stop` — limpa a fila e para a música.
+4. O botão **Desconectar bot** chama `POST /api/bot/leave` e encerra a sessão; `!stop` não desconecta o bot.
 
-**Anti-ban:** toda mensagem passa por uma fila com intervalo mínimo de **1500 ms** entre envios, inclusive a primeira depois de entrar. O `!stop` espera a fila e só então sai. Há também cooldown de 2,5 s por usuário e limite de 12 mensagens pendentes.
+**Anti-ban:** toda mensagem passa por uma fila com intervalo mínimo de **1500 ms**, cooldown de 2,5 s por usuário e limite de 12 mensagens pendentes. O bot também limita a fila a 30 músicas.
 
 **Endpoints:**
 
@@ -295,11 +311,11 @@ node server.js
 |---|---|---|
 | `POST` | `/api/bot/join` | body `{ "roomId": "391509865-1" }`; loga e entra na sala |
 | `POST` | `/api/bot/leave` | sai da sala e faz logout do bot |
-| `GET` | `/api/bot/status` | estado do bot, sala atual, rádio e erros |
+| `POST` | `/api/bot/play` | body `{ "query": "Michael Jackson" }`; busca e adiciona à fila |
+| `GET` | `/api/bot/status` | estado do bot, sala, fila, música atual e erros |
+| `GET` | `/api/radio/<sala>/<token>.mp3` | stream MP3 contínuo consumido pelo media_player |
 
-A lista de rádios fica em `backend/src/musicBot.js` (`RADIOS`). Troque `name` e `url` para usar suas estações. O bot envia o link público no chat; ele não reproduz áudio dentro do IMVU.
-
-O bot precisa ter permissão para entrar na sala (dono, amigo ou convite). Use apenas na sua sala privada. As rotas têm limite de uma entrada a cada 8 s por IP; se quiser fechar mais o acesso, coloque autenticação na frente delas.
+O bot precisa ter permissão para entrar na sala (dono, amigo ou convite) e ser Admin para trocar o áudio. As rotas têm limite de 8 s por IP no join, 3 s no play e 2,5 s no leave; se quiser fechar mais o acesso, coloque autenticação na frente delas.
 
 ---
 

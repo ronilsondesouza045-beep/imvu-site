@@ -9,3 +9,5 @@ npm-debug.log*
 .vercel/
 frontend/.netlify/
 backend/.env
+cookies.json
+backend/bin/

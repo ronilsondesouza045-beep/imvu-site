@@ -17,6 +17,9 @@
     form: $("#radioForm"),
     roomInput: $("#radioRoomInput"),
     joinBtn: $("#radioJoinBtn"),
+    songForm: $("#radioSongForm"),
+    songInput: $("#radioSongInput"),
+    songBtn: $("#radioSongBtn"),
     status: $("#radioStatus"),
     statusText: $("#radioStatusText"),
     empty: $("#radioEmpty"),
@@ -25,6 +28,7 @@
     content: $("#radioContent"),
     roomName: $("#radioRoomName"),
     roomId: $("#radioRoomId"),
+    queue: $("#radioQueue"),
     now: $("#radioNow"),
     link: $("#radioLink"),
     disconnectBtn: $("#radioDisconnectBtn"),
@@ -36,11 +40,6 @@
   let pollTimer = null;
   let joining = false;
   let lastStatus = null;
-
-  const timeOf = (value) => {
-    const date = value ? new Date(value) : new Date();
-    return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  };
 
   function radioToast(title, detail = "", kind = "info") {
     if (!els.toasts) return;
@@ -107,6 +106,40 @@
     if (iconBox) iconBox.dataset.kind = icon;
   }
 
+  function disableSongForm(disabled) {
+    if (els.songBtn) els.songBtn.disabled = disabled;
+    if (els.songInput) {
+      els.songInput.disabled = disabled;
+      els.songInput.placeholder = disabled
+        ? "Ative o bot na sala primeiro"
+        : "QUALQUER música: ex. Michael Jackson - Billie Jean";
+    }
+  }
+
+  function renderRadioDetails(status) {
+    els.roomName.textContent = status.roomName || "Sala";
+    els.roomId.textContent = status.roomId || "—";
+
+    const current = status.current || null;
+    els.now.textContent = current?.title || (status.playing ? "Carregando..." : "—");
+
+    const link = String(current?.url || status.streamUrl || "");
+    if (els.link) {
+      els.link.href = link || "#";
+      els.link.textContent = link ? (current ? "Abrir no YouTube" : "Abrir stream MP3") : "—";
+      els.link.classList.toggle("hidden", !link);
+    }
+
+    if (els.queue) {
+      const count = Array.isArray(status.queue) ? status.queue.length : 0;
+      els.queue.textContent = count
+        ? `${count} música${count > 1 ? "s" : ""} na fila`
+        : "fila vazia";
+    }
+
+    disableSongForm(!status.connected);
+  }
+
   function renderStatus(status) {
     if (!status) return;
     lastStatus = status;
@@ -122,6 +155,7 @@
         "Preencha BOT_USERNAME (ou BOT_EMAIL) e BOT_PASSWORD no backend/.env e reinicie o servidor."
       );
       showError("Configure as credenciais do bot no backend. O rastreador não é afetado.");
+      disableSongForm(true);
       if (els.joinBtn) els.joinBtn.disabled = false;
       return;
     }
@@ -130,6 +164,7 @@
       setStatus("loading", "Conectando...");
       setEmpty("Entrando na sala...", "O bot está logando e abrindo o chat via IMQ.");
       showError("");
+      disableSongForm(true);
       return;
     }
 
@@ -138,15 +173,7 @@
       els.empty.classList.add("hidden");
       els.content.classList.remove("hidden");
       els.disconnectBtn?.classList.remove("hidden");
-      els.roomName.textContent = status.roomName || "Sala";
-      els.roomId.textContent = status.roomId || "—";
-      els.now.textContent = status.radio || "—";
-      const link = String(status.radioUrl || "");
-      if (els.link) {
-        els.link.href = link || "#";
-        els.link.textContent = link || "—";
-        els.link.classList.toggle("hidden", !link);
-      }
+      renderRadioDetails(status);
       showError(status.lastError || status.warning || "");
       return;
     }
@@ -156,25 +183,14 @@
       els.empty.classList.add("hidden");
       els.content.classList.remove("hidden");
       els.disconnectBtn?.classList.remove("hidden");
-      els.roomName.textContent = "Fora de sala";
-      els.roomId.textContent = "—";
-      els.now.textContent = status.radio || "—";
-      const link = String(status.radioUrl || "");
-      if (els.link) {
-        els.link.href = link || "#";
-        els.link.textContent = link || "—";
-        els.link.classList.toggle("hidden", !link);
-      }
+      renderRadioDetails({ ...status, roomName: "Fora de sala", roomId: "" });
       showError(status.lastError || status.warning || "");
       return;
     }
 
     setStatus("idle", "Desconectado");
-    setEmpty(
-      "Bot fora da sala",
-      "Informe o ID da sua sala para ativar o DJ.",
-      "headphones"
-    );
+    setEmpty("Bot fora da sala", "Informe o ID da sua sala para ativar o DJ.", "headphones");
+    disableSongForm(true);
     showError(status.warning || status.lastError || "");
   }
 
@@ -186,9 +202,6 @@
         throw new Error(json?.error || `HTTP ${response.status}`);
       }
       renderStatus(json.status);
-      if (!silent && !lastStatus?.configured) {
-        /* status inicial sem toast */
-      }
       return json.status;
     } catch (error) {
       if (!silent) {
@@ -219,6 +232,7 @@
     showError("");
     setStatus("loading", "Conectando...");
     setEmpty("Entrando na sala...", "O bot está logando e abrindo o chat via IMQ.");
+    disableSongForm(true);
     try {
       localStorage.setItem("radar:radioRoom", roomId);
     } catch {
@@ -288,6 +302,58 @@
     }
   }
 
+  async function requestSong(event) {
+    event?.preventDefault?.();
+    if (!lastStatus?.connected) {
+      showError("Ative o DJ Bot na sua sala antes de pedir música.");
+      radioToast("Ative o bot primeiro", "O bot precisa estar na sala para tocar.", "warn");
+      return;
+    }
+
+    const query = String(els.songInput?.value || "").trim();
+    if (!query) {
+      showError("Digite o nome de qualquer música ou cole um link do YouTube.");
+      els.songInput?.focus();
+      return;
+    }
+
+    if (els.songBtn) {
+      els.songBtn.disabled = true;
+      els.songBtn.textContent = "Buscando...";
+    }
+    showError("");
+
+    try {
+      const response = await fetch(`${HTTP_BASE}/api/bot/play`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.ok) {
+        if (json?.status) renderStatus(json.status);
+        throw new Error(json?.error || `Falha ao pedir música (HTTP ${response.status})`);
+      }
+      if (json.status) renderStatus(json.status);
+      radioToast("Música na fila", json.song?.title || query, "success");
+      if (json.warning) {
+        radioToast("Admin necessário", json.warning, "warn");
+      }
+      if (els.songInput) els.songInput.value = "";
+      fetchStatus({ silent: true });
+    } catch (error) {
+      const message = error?.message || String(error);
+      showError(message);
+      radioToast("Não consegui adicionar", message, "danger");
+      await fetchStatus({ silent: true });
+    } finally {
+      if (els.songBtn) {
+        els.songBtn.disabled = !lastStatus?.connected;
+        els.songBtn.textContent = "Pedir música";
+      }
+    }
+  }
+
   function setView(view) {
     const isRadio = view === "radio";
     els.radarView?.classList.toggle("hidden", isRadio);
@@ -296,7 +362,7 @@
     els.tabRadio?.classList.toggle("is-active", isRadio);
     document.body.dataset.view = isRadio ? "radio" : "radar";
     if (isRadio) {
-      document.title = "Rádio para Sala — IMVU Radar";
+      document.title = "DJ para Sala — IMVU Radar";
       fetchStatus({ silent: true });
     } else {
       document.title = "IMVU Radar — presença em tempo real";
@@ -306,6 +372,7 @@
   els.tabRadar?.addEventListener("click", () => setView("radar"));
   els.tabRadio?.addEventListener("click", () => setView("radio"));
   els.form?.addEventListener("submit", joinBot);
+  els.songForm?.addEventListener("submit", requestSong);
   els.disconnectBtn?.addEventListener("click", leaveBot);
 
   try {
@@ -321,6 +388,7 @@
     setView("radar");
   }
 
+  disableSongForm(true);
   fetchStatus({ silent: true });
   pollTimer = setInterval(() => {
     if (document.body.dataset.view === "radio") fetchStatus({ silent: true });

@@ -9,6 +9,7 @@ import { RadarTracker } from "./src/tracker.js";
 import { safeNick } from "./src/imvu.js";
 import { pushAvailable, pushPublicKey } from "./src/push.js";
 import { musicBot } from "./src/musicBot.js";
+import { radioStream } from "./src/radioStream.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -106,6 +107,47 @@ function allowBotAction(key, intervalMs) {
 app.get("/api/bot/status", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({ ok: true, status: musicBot.status() });
+});
+
+app.post("/api/bot/play", async (req, res) => {
+  const ip = String(req.ip || req.socket.remoteAddress || "unknown");
+  if (!allowBotAction(`play:${ip}`, 3_000)) {
+    res.status(429).json({ ok: false, error: "Aguarde alguns segundos antes de pedir outra música." });
+    return;
+  }
+
+  const query = String(req.body?.query || "").trim().slice(0, 160);
+  if (!query) {
+    res.status(400).json({ ok: false, error: "Digite o nome da música." });
+    return;
+  }
+
+  const status = musicBot.status();
+  if (!status.connected) {
+    res.status(409).json({
+      ok: false,
+      error: "Ative o DJ Bot em uma sala antes de pedir música.",
+      status,
+    });
+    return;
+  }
+
+  try {
+    const result = await musicBot.enqueuePlay(query, { source: "site" });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ...result, status: musicBot.status() });
+  } catch (error) {
+    res.status(502).json({
+      ok: false,
+      error: error?.message || "Não consegui buscar essa música.",
+      status: musicBot.status(),
+    });
+  }
+});
+
+// Stream MP3 contínuo por sala (o media_player do IMVU aponta para cá).
+app.get("/api/radio/:roomId/:file", (req, res) => {
+  radioStream.handleRequest(req, res, req.params.roomId, req.params.file);
 });
 
 app.post("/api/bot/join", async (req, res) => {
@@ -343,6 +385,7 @@ function shutdown(signal) {
     /* ignora */
   }
   tracker.destroy();
+  radioStream.shutdown();
   void musicBot.shutdown().catch(() => {});
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5_000).unref();

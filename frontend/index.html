@@ -220,7 +220,15 @@
         <section class="radio-hero">
           <span class="eyebrow">DJ Bot · IMVU</span>
           <h1 class="font-display">Música na sua sala.</h1>
-          <p>Ative o bot, entre no chat e peça a rádio. Sem sair do site.</p>
+          <p>Ative o bot, dê Admin a ele e peça QUALQUER música. O bot busca no YouTube e toca a fila na sala.</p>
+        </section>
+
+        <section class="radio-admin-warning" role="note" aria-label="Aviso de permissão de Admin">
+          <div class="radio-admin-warning-icon" aria-hidden="true">!</div>
+          <div>
+            <strong>⚠️ ATENÇÃO: Para o bot tocar as músicas automaticamente, você PRECISA dar permissão de ADMIN para ele na sua sala do IMVU.</strong>
+            <p><b>Como dar Admin:</b> Vá nas configurações da sua sala no IMVU &gt; Permissões &gt; Adicione o nick do bot como Admin.</p>
+          </div>
         </section>
 
         <section class="grid gap-4 lg:grid-cols-[1.1fr_.9fr]">
@@ -229,9 +237,9 @@
               <div class="eyebrow-sm">Ativar DJ</div>
               <span class="tag tag-private">BOT</span>
             </div>
-            <h2 class="font-display mt-2 text-2xl font-semibold">Rádio para Sala</h2>
+            <h2 class="font-display mt-2 text-2xl font-semibold">DJ para Sala</h2>
             <p class="mt-2 text-sm leading-relaxed text-slate-400">
-              O bot entra na sala, fica no chat e responde aos comandos. Use o ID da sua sala privada.
+              O bot entra na sala, busca qualquer música no YouTube e toca uma de cada vez. Use o ID da sua sala.
             </p>
 
             <form id="radioForm" class="mt-5" novalidate>
@@ -251,19 +259,37 @@
               </div>
             </form>
 
+            <form id="radioSongForm" class="radio-song-form" novalidate>
+              <label for="radioSongInput" class="radio-label">Pedir música</label>
+              <div class="radio-input-row">
+                <input
+                  id="radioSongInput"
+                  class="radio-input"
+                  type="text"
+                  placeholder="QUALQUER música: ex. Michael Jackson - Billie Jean"
+                  autocomplete="off"
+                  spellcheck="false"
+                  maxlength="160"
+                  aria-label="Nome da música ou link do YouTube"
+                />
+                <button id="radioSongBtn" class="btn-primary" type="submit">Pedir música</button>
+              </div>
+              <p class="radio-hint">Digite o nome ou cole um link do YouTube. A música entra na fila.</p>
+            </form>
+
             <div class="radio-commands">
               <div class="eyebrow-sm">Comandos no chat</div>
               <div class="radio-command">
-                <code>!play</code>
-                <span>Toca a rádio atual e manda o link</span>
+                <code>!play nome-da-musica</code>
+                <span>Adiciona QUALQUER música à fila (ex.: !play Anitta)</span>
               </div>
               <div class="radio-command">
                 <code>!skip</code>
-                <span>Troca para a próxima rádio</span>
+                <span>Pula para a próxima música da fila</span>
               </div>
               <div class="radio-command">
                 <code>!stop</code>
-                <span>Para a rádio e sai da sala</span>
+                <span>Limpa a fila e para a música</span>
               </div>
             </div>
 
@@ -306,6 +332,10 @@
                 <span>ID</span>
                 <code id="radioRoomId">—</code>
               </div>
+              <div class="radio-kv">
+                <span>Fila</span>
+                <strong id="radioQueue">0 músicas</strong>
+              </div>
               <div class="radio-now">
                 <div class="eyebrow-sm">Tocando agora</div>
                 <div id="radioNow" class="radio-now-name">—</div>
@@ -320,7 +350,7 @@
 
             <div class="radio-meta">
               <span>Anti-ban <strong id="radioAntiBan">1,5s</strong></span>
-              <span class="mono">!play · !skip · !stop</span>
+              <span class="mono">!play nome-da-musica · !skip · !stop</span>
             </div>
           </article>
         </section>

@@ -1,16 +1,14 @@
 import "dotenv/config";
+import crypto from "node:crypto";
 import { Client } from "@imvu/client";
+import { radioStream } from "./radioStream.js";
+import { searchSong } from "./songResolver.js";
 
 /**
- * Music Bot / Radio para salas do IMVU.
- *
- * O login, a entrada na sala e o chat usam @imvu/client, que por sua vez
- * usa @imvu/imq para o canal realtime (mensagens e keepalive da sala).
- *
- * Regras de seguranca:
- *  - a conta do bot deve ser SEPARADA da conta do rastreador (IMVU_USER);
- *  - toda mensagem passa por uma fila com intervalo minimo de 1500 ms;
- *  - o bot so responde a !play, !skip e !stop no chat publico da sala.
+ * Music bot: fila por sala, busca qualquer música no YouTube e tenta trocar o
+ * media_player da sala (provider web_radio). O IMVU exige que a conta seja
+ * Host/Admin da sala; se a troca não for confirmada, o bot manda o link do
+ * stream MP3 no chat para o usuário colar manualmente no rádio.
  */
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,26 +31,19 @@ const MIN_SEND_INTERVAL_MS = Math.max(
 );
 const COMMAND_COOLDOWN_MS = 2_500;
 const MAX_PENDING_MESSAGES = 12;
+const MAX_QUEUE = 30;
+const ADMIN_WARNING =
+  "⚠️ Preciso ser Admin da sala para tocar a música automaticamente. Me dê Admin ou copie este link no rádio:";
 
-/** Lista de radios publicas. Para trocar, edite name/url abaixo. */
-export const RADIOS = [
-  {
-    name: "Zeno FM",
-    url: "http://stream.zeno.fm/0r0xa792kwzuv",
-  },
-  {
-    name: "SomaFM Groove Salad",
-    url: "https://ice1.somafm.com/groovesalad-128-mp3",
-  },
-  {
-    name: "SomaFM Lush",
-    url: "https://ice1.somafm.com/lush-128-mp3",
-  },
-  {
-    name: "SomaFM Deep Space One",
-    url: "https://ice1.somafm.com/deepspaceone-128-mp3",
-  },
-];
+const mediaPlayerSong = (song) =>
+  song
+    ? {
+        title: song.title,
+        url: song.url,
+        durationSec: song.durationSec || 0,
+        thumbnail: song.thumbnail || "",
+      }
+    : null;
 
 class MusicBot {
   constructor() {
@@ -64,14 +55,27 @@ class MusicBot {
     this.roomId = "";
     this.roomName = "";
     this.joinedAt = 0;
-    this.radioIndex = 0;
     this.lastError = "";
     this.lastSentAt = 0;
     this.sendChain = Promise.resolve();
+    this.playChain = Promise.resolve();
     this.pendingSends = 0;
     this.commandCooldowns = new Map();
-    this.stopping = false;
     this.username = "";
+    this.streamUrl = "";
+    this.streamSession = "";
+    this.mediaPlayerUrl = "";
+    this.radioWarning = "";
+
+    radioStream.on("streamError", (roomId, message) => {
+      if (roomId !== this.roomId || !this.connected) return;
+      this.lastError = message;
+      this.sendChat(`❌ Não consegui tocar essa música: ${message}`).catch(() => {});
+    });
+    radioStream.on("idle", (roomId) => {
+      if (roomId !== this.roomId || !this.connected) return;
+      this.sendChat("⏹️ A fila terminou.").catch(() => {});
+    });
   }
 
   credentials() {
@@ -88,10 +92,6 @@ class MusicBot {
       password: validPassword,
       configured: Boolean(validPassword && (validUsername || validEmail)),
     };
-  }
-
-  currentRadio() {
-    return RADIOS[this.radioIndex % RADIOS.length];
   }
 
   async ensureClient() {
@@ -171,7 +171,6 @@ class MusicBot {
 
       // Compatibilidade com a API atual: o @imvu/client manda POST {} em
       // /chat/chat-<rid>/participants, mas o IMVU exige o id do usuario.
-      // Mantemos o client/realtime do library e so ajustamos esse POST.
       const originalRequest = client.request;
       client.request = function patchedRequest(url, options = {}) {
         const method = String(options.method || "GET").toUpperCase();
@@ -208,8 +207,11 @@ class MusicBot {
       this.roomId = id;
       this.roomName = room.name || id;
       this.joinedAt = Date.now();
-      this.radioIndex = 0;
-      this.stopping = false;
+      this.streamUrl = "";
+      this.streamSession = "";
+      this.mediaPlayerUrl = "";
+      this.radioWarning = "";
+      this.playChain = Promise.resolve();
       this.lastSentAt = Date.now();
       this.commandCooldowns.clear();
 
@@ -221,7 +223,9 @@ class MusicBot {
       });
 
       console.log(`[bot] entrou na sala ${id} (${this.roomName})`);
-      this.sendChat("🎧 DJ Bot conectado! Digite !play, !skip ou !stop no chat.").catch(() => {});
+      this.sendChat(
+        "🎧 DJ Bot conectado! Peça qualquer música: !play nome-da-musica · !skip · !stop. Preciso ser Admin da sala para tocar automaticamente."
+      ).catch(() => {});
       return this.status();
     } catch (error) {
       const apiCode = String(error?.apiCode || error?.response?.error || "");
@@ -245,7 +249,12 @@ class MusicBot {
     this.roomId = "";
     this.roomName = "";
     this.joinedAt = 0;
-    this.stopping = false;
+    this.streamUrl = "";
+    this.streamSession = "";
+    this.mediaPlayerUrl = "";
+    this.radioWarning = "";
+
+    if (previousRoom) radioStream.stop(previousRoom);
 
     if (session) {
       try {
@@ -270,6 +279,7 @@ class MusicBot {
   }
 
   shutdown() {
+    if (this.roomId) radioStream.stop(this.roomId);
     return this.leave({ logout: true });
   }
 
@@ -277,10 +287,14 @@ class MusicBot {
     if (this.session !== session) return;
     this.session = null;
     this.connected = false;
+    const previousRoom = this.roomId;
     this.roomId = "";
     this.roomName = "";
     this.joinedAt = 0;
-    this.stopping = false;
+    this.streamUrl = "";
+    this.streamSession = "";
+    this.mediaPlayerUrl = "";
+    if (previousRoom) radioStream.stop(previousRoom);
     if (event?.reason === "booted") this.lastError = "O bot foi expulso da sala.";
     else if (event?.reason === "removed") this.lastError = "O bot foi removido da sala.";
     console.log(`[bot] chat fechado (${event?.reason || "desconhecido"})`);
@@ -288,8 +302,9 @@ class MusicBot {
 
   onMessage(message) {
     if (!message || message.whisper || message.action) return;
-    const text = clean(message.text).toLowerCase();
-    const command = text.split(/\s+/)[0];
+    const text = clean(message.text);
+    const [rawCommand, ...args] = text.split(/\s+/);
+    const command = String(rawCommand || "").toLowerCase();
     if (!["!play", "!skip", "!stop"].includes(command)) return;
 
     const userId = String(message.userId || "");
@@ -302,34 +317,212 @@ class MusicBot {
       if (oldest) this.commandCooldowns.delete(oldest);
     }
 
-    this.handleCommand(command, userId).catch((error) => {
+    this.handleCommand(command, args.join(" ").trim()).catch((error) => {
       this.lastError = error?.message || String(error);
       console.warn(`[bot] comando ${command} falhou: ${this.lastError}`);
     });
   }
 
-  async handleCommand(command, userId) {
-    if (this.stopping) return;
-    console.log(`[bot] comando ${command} de ${userId || "?"}`);
+  async handleCommand(command, argText) {
+    if (!this.connected) return;
+    console.log(`[bot] comando ${command}${argText ? ` (${argText.slice(0, 80)})` : ""}`);
 
     if (command === "!play") {
-      const radio = this.currentRadio();
-      await this.sendChat(`🎵 Tocando agora: ${radio.name}\n${radio.url}`);
+      await this.enqueuePlay(argText, { source: "chat" });
       return;
     }
 
     if (command === "!skip") {
-      this.radioIndex = (this.radioIndex + 1) % RADIOS.length;
-      const radio = this.currentRadio();
-      await this.sendChat(`⏭️ Próxima rádio: ${radio.name}\n${radio.url}`);
+      const result = radioStream.skip(this.roomId);
+      if (!result.previous && !result.next) {
+        await this.sendChat("⏭️ A fila está vazia.");
+        return;
+      }
+      if (result.next) {
+        await this.sendChat(`⏭️ Pulando... Próxima: ${result.next.title}`);
+      } else {
+        this.streamUrl = "";
+        await this.tocarNaSala(this.roomId, "", "stopped", "").catch(() => {});
+        await this.sendChat("⏭️ Essa era a última. A fila está vazia.");
+      }
       return;
     }
 
     if (command === "!stop") {
-      this.stopping = true;
-      await this.sendChat("⏹️ Rádio parada. Até mais!");
-      await this.leave({ logout: false });
+      radioStream.stop(this.roomId);
+      this.streamUrl = "";
+      this.streamSession = "";
+      await this.sendChat("⏹️ Fila limpa e música parada.");
+      await this.tocarNaSala(this.roomId, "", "stopped", "").catch((error) => {
+        console.warn(`[bot] não consegui parar o player da sala: ${error?.message || error}`);
+      });
     }
+  }
+
+  /** Serializa buscas para a ordem da fila ser a ordem dos pedidos. */
+  enqueuePlay(query, meta = {}) {
+    const run = this.playChain.then(() => this.doPlay(query, meta));
+    this.playChain = run.catch(() => {});
+    return run;
+  }
+
+  async doPlay(query, meta = {}) {
+    const text = clean(query);
+    if (!text) {
+      await this.sendChat("Use: !play nome-da-musica (ex.: !play Michael Jackson - Billie Jean)");
+      return { ok: false, error: "Música não informada." };
+    }
+
+    if (radioStream.queueLength(this.roomId) >= MAX_QUEUE) {
+      await this.sendChat(`⚠️ A fila está cheia (${MAX_QUEUE} músicas).`);
+      return { ok: false, error: "Fila cheia." };
+    }
+
+    await this.sendChat(`🔎 Buscando: ${text}`);
+
+    let song;
+    try {
+      song = await searchSong(text);
+    } catch (error) {
+      const message = error?.message || String(error);
+      this.lastError = message;
+      await this.sendChat(`❌ Não encontrei "${text}". Tente outro nome ou link do YouTube.`);
+      throw error;
+    }
+
+    const wasEmpty =
+      radioStream.queueLength(this.roomId) === 0 && !radioStream.currentSong(this.roomId);
+
+    radioStream.enqueue(this.roomId, song);
+    await this.sendChat(`🎵 Adicionado à fila: ${song.title}`);
+
+    let streamUrl = this.streamUrl;
+    let warning = this.radioWarning;
+
+    if (wasEmpty) {
+      this.streamSession = crypto.randomUUID();
+      streamUrl = radioStream.urlForRoom(this.roomId, this.streamSession);
+      try {
+        await this.tocarNaSala(this.roomId, streamUrl, "playing", "DJ Bot");
+        this.streamUrl = streamUrl;
+        this.radioWarning = "";
+        warning = "";
+        await this.sendChat(`▶️ Tocando agora: ${song.title}`);
+      } catch (error) {
+        // O stream já está válido mesmo sem Admin; guardamos o link para o
+        // usuário copiar no rádio da sala.
+        this.streamUrl = streamUrl;
+        this.radioWarning = error?.message || String(error);
+        warning = this.radioWarning;
+        this.lastError = this.radioWarning;
+        await this.sendChat(`${ADMIN_WARNING} ${streamUrl}`);
+      }
+    } else if (!this.streamUrl) {
+      // A fila já existia, mas o player ainda não tinha sido configurado.
+      streamUrl = radioStream.urlForRoom(this.roomId);
+    }
+
+    return {
+      ok: true,
+      song: mediaPlayerSong(song),
+      queue: radioStream.snapshot(this.roomId).queue,
+      streamUrl: this.streamUrl || streamUrl,
+      warning,
+      source: meta.source || "chat",
+    };
+  }
+
+  /**
+   * Atualiza o media_player web_radio da sala. O IMVU expõe
+   * media_player.current_state.station_url/status; a troca é feita por IMQ e
+   * confirmada por REST. Sem Host/Admin, a confirmação não acontece.
+   */
+  async tocarNaSala(roomId, streamUrl, status = "playing", stationName = "DJ Bot") {
+    const id = clean(roomId);
+    if (!/^\d+-\d+$/.test(id)) throw new Error("ID de sala inválido.");
+
+    const client = await this.ensureClient();
+    const room = await client.rooms.fetch(id, { force: true });
+    if (!room) throw new Error("Sala não encontrada.");
+
+    const experienceUrl =
+      room.relations?.media_experience || room.relations?.hangout_experience;
+    if (!experienceUrl) {
+      throw new Error("Essa sala não tem media_player de rádio (media_experience).");
+    }
+
+    const experience = await client.resource(experienceUrl);
+    const playersUrl = experience?.relations?.media_players;
+    if (!playersUrl) throw new Error("A sala não expõe media_players.");
+
+    const playersNode = await client.resource(playersUrl);
+    const players = [];
+    if (playersNode?.data?.type?.provider) players.push(playersNode);
+    if (Array.isArray(playersNode?.data?.items)) {
+      for (const item of playersNode.data.items) {
+        if (item?.data?.type?.provider) players.push(item);
+        else if (item?.url) {
+          try {
+            const node = await client.resource(item.url);
+            if (node?.data?.type?.provider) players.push(node);
+          } catch {
+            /* ignora */
+          }
+        }
+      }
+    }
+
+    const player =
+      players.find((node) => node.data?.type?.provider === "web_radio") ||
+      players.find((node) => node.data?.type?.format === "radio") ||
+      players[0];
+
+    if (!player) throw new Error("Essa sala não tem media_player web_radio.");
+
+    this.mediaPlayerUrl = player.url;
+
+    const state = {
+      station_name: status === "stopped" ? "" : clean(stationName) || "DJ Bot",
+      station_url: status === "stopped" ? "" : clean(streamUrl),
+      status: status === "stopped" ? "stopped" : "playing",
+    };
+
+    const readState = async () => {
+      const fresh = await client.resource(player.url);
+      return fresh?.data?.current_state || null;
+    };
+
+    const matches = (current) =>
+      current &&
+      String(current.station_url || "") === String(state.station_url || "") &&
+      String(current.status || "") === String(state.status || "");
+
+    const updateTarget = player.updates;
+    if (updateTarget?.queue && updateTarget?.mount) {
+      const payloads = [
+        { current_state: state },
+        { ...state },
+        { data: { current_state: state }, id: player.url, type: "update" },
+      ];
+
+      for (const payload of payloads) {
+        try {
+          await client.realtime.send(updateTarget.queue, updateTarget.mount, payload);
+        } catch (error) {
+          console.warn(`[bot] IMQ media_player recusou: ${error?.message || error}`);
+          continue;
+        }
+        await sleep(1_100);
+        const current = await readState();
+        if (matches(current)) {
+          return { ok: true, playerUrl: player.url, state };
+        }
+      }
+    }
+
+    throw new Error(
+      "O IMVU não confirmou a troca do media_player. O bot precisa ser Host/Admin da sala."
+    );
   }
 
   /**
@@ -369,16 +562,20 @@ class MusicBot {
 
   status() {
     const credentials = this.credentials();
-    const radio = this.currentRadio();
+    const radio = radioStream.snapshot(this.roomId);
     const sameAsTracker =
       credentials.username &&
       clean(process.env.IMVU_USER) &&
       credentials.username.toLowerCase() === clean(process.env.IMVU_USER).toLowerCase();
-    const warning = sameAsTracker
-      ? process.env.BOT_ALLOW_SAME_ACCOUNT
-        ? "O bot compartilha a conta do rastreador; os dois usam a mesma conta IMVU."
-        : "A conta do bot e a mesma do rastreador. Use uma conta separada."
-      : "";
+    const warnings = [];
+    if (sameAsTracker) {
+      warnings.push(
+        process.env.BOT_ALLOW_SAME_ACCOUNT
+          ? "O bot compartilha a conta do rastreador; os dois usam a mesma conta IMVU."
+          : "A conta do bot e a mesma do rastreador. Use uma conta separada."
+      );
+    }
+    if (this.radioWarning) warnings.push(this.radioWarning);
 
     return {
       configured: credentials.configured,
@@ -388,12 +585,14 @@ class MusicBot {
       roomId: this.roomId,
       roomName: this.roomName,
       joinedAt: this.joinedAt,
-      radio: radio?.name || "",
-      radioUrl: radio?.url || "",
-      radios: RADIOS.map(({ name, url }) => ({ name, url })),
+      current: radio.current,
+      queue: radio.queue,
+      playing: radio.playing,
+      streamUrl: this.streamUrl,
+      mediaPlayerUrl: this.mediaPlayerUrl,
       sendIntervalMs: MIN_SEND_INTERVAL_MS,
       pendingMessages: this.pendingSends,
-      warning,
+      warning: warnings.join(" "),
       lastError: this.lastError,
     };
   }
