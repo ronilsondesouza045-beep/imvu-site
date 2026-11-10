@@ -1824,3 +1824,10 @@ kbd {
     font-size: 8.5px;
   }
 }
+
+@media (max-width: 640px) {
+  /* deixa o conteudo rolar acima do badge da Netlify no rodape */
+  #radioView {
+    padding-bottom: 56px;
+  }
+}
