@@ -99,26 +99,39 @@ app.get("/api/diag", async (req, res) => {
     return;
   }
   const cid = person.cid;
-  const catvu = await catvuFind(nick, { timeout: 12_000, force: true });
-  let catvuRaw = null;
+  const catvu = await catvuFind(nick, { timeout: 20_000, force: true });
+  let jinaTest = null;
   try {
-    const rawResponse = await fetch(
-      `https://catvu.live/api/private-room/find?username=${encodeURIComponent(nick)}`,
+    const jinaResponse = await fetch(
+      `https://r.jina.ai/http://catvu.live/api/private-room/find?username=${encodeURIComponent(nick)}`,
       {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-          Accept: "application/json",
+          Accept: "text/plain",
         },
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(25_000),
       }
     );
-    catvuRaw = {
-      status: rawResponse.status,
-      body: String(await rawResponse.text()).slice(0, 800),
+    jinaTest = {
+      status: jinaResponse.status,
+      body: String(await jinaResponse.text()).slice(0, 1200),
     };
   } catch (error) {
-    catvuRaw = { error: String(error?.message || error) };
+    jinaTest = { error: String(error?.message || error) };
+  }
+  const userNode = await tracker.api.getJson(`/user/user-${cid}`).catch(() => null);
+  const presenceNode = await tracker.api.getJson(`/presence/presence-${cid}`).catch(() => null);
+  const probes = {};
+  for (const path of [
+    `/user/user-${cid}/current_room`,
+    `/user/user-${cid}/room`,
+    `/presence/presence-${cid}/current_room`,
+    `/presence/presence-${cid}/room`,
+    `/presence/presence-${cid}/chat`,
+  ]) {
+    const result = await tracker.api.raw(path).catch(() => null);
+    probes[path] = result ? { status: result.status, body: String(result.text || "").slice(0, 500) } : null;
   }
   const paths = [
     `/api/avatarcard.php?cid=${cid}`,
@@ -132,10 +145,21 @@ app.get("/api/diag", async (req, res) => {
   const calls = {};
   for (const path of paths) {
     const result = await tracker.api.clientDynamic(path);
-    const limit = path.includes("avatarcard") ? 20_000 : 1_200;
+    const limit = path.includes("avatarcard") ? 200_000 : 1_200;
     calls[path] = { status: result.status, body: String(result.text || "").slice(0, limit) };
   }
-  res.json({ nick, cid, profile: person, catvu, catvuRaw, calls });
+  res.json({
+    nick,
+    cid,
+    profile: person,
+    env: { render: process.env.RENDER || null, catvuMode: process.env.CATVU_MODE || null },
+    catvu,
+    jinaTest,
+    userNode,
+    presenceNode,
+    probes,
+    calls,
+  });
 });
 
 app.get("/api/avatar", async (req, res) => {
