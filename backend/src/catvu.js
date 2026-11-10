@@ -16,10 +16,59 @@ const UA =
 
 const FIND_TTL = 30_000;
 const FIND_CACHE_MAX = 500;
-const FIND_MIN_INTERVAL = 750;
+const FIND_MIN_INTERVAL = 1_000;
+const SNAPSHOT_TTL = 10_000;
 const findCache = new Map();
+const snapshotCache = new Map();
 let findChain = Promise.resolve();
 let lastFindAt = 0;
+
+function preferJina() {
+  return process.env.CATVU_MODE === "jina" || process.env.RENDER === "true";
+}
+
+function parseJinaJson(text) {
+  const raw = String(text || "");
+  const marker = "Markdown Content:";
+  const index = raw.indexOf(marker);
+  const body = index >= 0 ? raw.slice(index + marker.length) : raw;
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("Jina sem JSON");
+  return JSON.parse(body.slice(start, end + 1));
+}
+
+/**
+ * Busca JSON do catvu. No Render o catvu bloqueia o IP e estoura timeout;
+ * nesse caso usa o Jina Reader, que acessa o catvu e devolve o JSON em texto.
+ */
+async function fetchCatvuJson(url, { timeout = 30_000 } = {}) {
+  if (!preferJina()) {
+    try {
+      const direct = await fetch(url, {
+        headers: {
+          "User-Agent": UA,
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(Math.min(timeout, 4_000)),
+      });
+      if (direct.ok) return await direct.json();
+    } catch {
+      /* cai para o Jina */
+    }
+  }
+
+  const jinaUrl = `https://r.jina.ai/http://${String(url).replace(/^https?:\/\//, "")}`;
+  const proxied = await fetch(jinaUrl, {
+    headers: {
+      "User-Agent": UA,
+      Accept: "text/plain",
+    },
+    signal: AbortSignal.timeout(timeout),
+  });
+  if (!proxied.ok) throw new Error(`jina HTTP ${proxied.status}`);
+  return parseJinaJson(await proxied.text());
+}
 
 /** Serializa e espaça as consultas no catvu para reduzir 429. */
 function scheduleFind(task) {
@@ -109,21 +158,13 @@ export async function findRooms(nick, { timeout = 10_000, force = false } = {}) 
 
   return scheduleFind(async () => {
     try {
-      const response = await fetch(`${BASE}/api/private-room/find?username=${encodeURIComponent(clean)}`, {
-        headers: {
-          "User-Agent": UA,
-          Accept: "application/json",
-        },
-        signal: AbortSignal.timeout(timeout),
-      });
+      const json = await fetchCatvuJson(
+        `${BASE}/api/private-room/find?username=${encodeURIComponent(clean)}`,
+        { timeout }
+      );
       if (process.env.CATVU_DEBUG) {
-        console.error(`[catvu] find ${clean} -> HTTP ${response.status}`);
+        console.error(`[catvu] find ${clean} ok rooms=${Array.isArray(json?.rooms) ? json.rooms.length : 0}`);
       }
-      if (!response.ok) {
-        if (cached) return cached.data;
-        return null;
-      }
-      const json = await response.json();
       const rooms = (Array.isArray(json?.rooms) ? json.rooms : [])
         .map(normalizeRoom)
         .filter(Boolean);
@@ -143,6 +184,57 @@ export async function findRooms(nick, { timeout = 10_000, force = false } = {}) 
     } catch (error) {
       if (process.env.CATVU_DEBUG) {
         console.error(`[catvu] find ${clean} falhou:`, error?.message || error);
+      }
+      return cached ? cached.data : null;
+    }
+  });
+}
+
+/**
+ * Snapshot unico da sala via /api/room/<id>?lite=1.
+ * Devolve room + participants (cid, username, displayName).
+ * E o bastante para o roster inicial; joined/left chegam depois pelo IMQ.
+ */
+export async function fetchRoomSnapshot(roomId, nick, { timeout = 30_000, force = false } = {}) {
+  const id = String(roomId || "");
+  if (!/^\d+-\d+$/.test(id)) return null;
+  const cached = snapshotCache.get(id);
+  if (!force && cached && Date.now() - cached.at < SNAPSHOT_TTL) return cached.data;
+
+  const url =
+    `${BASE}/api/room/${encodeURIComponent(id)}?lite=1&fresh=1&username=` +
+    encodeURIComponent(String(nick || ""));
+
+  return scheduleFind(async () => {
+    try {
+      const json = await fetchCatvuJson(url, { timeout });
+      const participants = (Array.isArray(json?.participants) ? json.participants : [])
+        .map((person) => ({
+          cid: String(person?.cid || ""),
+          username: String(person?.username || ""),
+          displayName: String(person?.displayName || person?.display_name || person?.username || ""),
+        }))
+        .filter((person) => /^\d+$/.test(person.cid));
+
+      const data = {
+        room: {
+          roomId: id,
+          name: String(json?.room?.name || ""),
+          isPrivate: Boolean(json?.room?.isPrivate),
+          ownerUsername: String(json?.room?.ownerUsername || ""),
+          occupancy: Number(json?.room?.occupancy || 0),
+        },
+        participants,
+        fetchedAt: Date.now(),
+      };
+      snapshotCache.set(id, { at: Date.now(), data });
+      if (process.env.CATVU_DEBUG) {
+        console.error(`[catvu] snapshot ${id} ok participants=${participants.length}`);
+      }
+      return data;
+    } catch (error) {
+      if (process.env.CATVU_DEBUG) {
+        console.error(`[catvu] snapshot ${id} falhou:`, error?.message || error);
       }
       return cached ? cached.data : null;
     }
