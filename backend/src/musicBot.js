@@ -107,12 +107,13 @@ class MusicBot {
 
     const trackerUser = clean(process.env.IMVU_USER);
     if (
+      !process.env.BOT_ALLOW_SAME_ACCOUNT &&
       credentials.username &&
       trackerUser &&
       credentials.username.toLowerCase() === trackerUser.toLowerCase()
     ) {
       throw new Error(
-        "A conta do bot e a mesma do rastreador (IMVU_USER). Use uma conta separada para o bot."
+        "A conta do bot e a mesma do rastreador (IMVU_USER). Use uma conta separada para o bot ou defina BOT_ALLOW_SAME_ACCOUNT=1."
       );
     }
 
@@ -369,12 +370,15 @@ class MusicBot {
   status() {
     const credentials = this.credentials();
     const radio = this.currentRadio();
-    const warning =
+    const sameAsTracker =
       credentials.username &&
       clean(process.env.IMVU_USER) &&
-      credentials.username.toLowerCase() === clean(process.env.IMVU_USER).toLowerCase()
-        ? "A conta do bot e a mesma do rastreador. Use uma conta separada."
-        : "";
+      credentials.username.toLowerCase() === clean(process.env.IMVU_USER).toLowerCase();
+    const warning = sameAsTracker
+      ? process.env.BOT_ALLOW_SAME_ACCOUNT
+        ? "O bot compartilha a conta do rastreador; os dois usam a mesma conta IMVU."
+        : "A conta do bot e a mesma do rastreador. Use uma conta separada."
+      : "";
 
     return {
       configured: credentials.configured,
