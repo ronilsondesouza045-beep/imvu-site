@@ -1471,7 +1471,7 @@ kbd {
     border-left: 0;
     border-radius: 20px 20px 0 0;
     transform: translateY(102%);
-    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+    padding: 18px 16px calc(64px + env(safe-area-inset-bottom));
   }
 
   .alerts-panel.is-open {

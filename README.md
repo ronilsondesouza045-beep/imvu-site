@@ -129,6 +129,11 @@ CATVU_RETRY_MS=20000
 | `IMVU_USER` / `IMVU_PASS` | conta usada pelo backend para login e IMQ |
 | `CORS_ORIGIN` | `*` ou lista de origens separadas por vírgula |
 | `MAX_WATCHERS` | limite de navegadores vigiando ao mesmo tempo |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | chaves Web Push (gere com `npx web-push generate-vapid-keys --json`) |
+| `VAPID_SUBJECT` | contato do VAPID, ex. `mailto:seu@email` |
+| `SITE_URL` | URL pública do frontend usada no clique da notificação |
+| `ALERT_TTL_MS` | quanto tempo um alerta push fica ativo (padrão 2h) |
+| `MAX_ALERTS` | limite de assinaturas push simultâneas (padrão 30) |
 | `TARGET_ROOM_SCAN` | quantas filas `chat-<cid>-1..N` assinar (1–800) |
 | `OWN_ROOM_SCAN` | quantas salas próprias do alvo varrer no sync inicial (padrão 120) |
 | `CATVU_RETRY_MS` | intervalo de rechecagem do catvu quando o alvo ainda não foi localizado (padrão 20000) |
@@ -213,6 +218,26 @@ O IMQ só manda evento de presença quando o alvo **entra, sai ou troca de sala*
 5. Se o room node do IMVU vier 403 (sala privada de terceiro), o nome cai para `Sala privada N`; os ocupantes vêm do roster autenticado quando liberado e dos eventos `edge:participants` do IMQ.
 
 O catvu é rechecado a cada `CATVU_RETRY_MS` apenas enquanto o alvo ainda não foi localizado pela relation, pelas listas, pelas salas próprias ou pelo probe.
+
+### Alertas no navegador / Web Push
+
+O sino no header abre o painel **Alertas**:
+
+1. **Ativar alertas** pede permissão de notificação, registra o `sw.js`, assina o Web Push com a chave VAPID e envia `alert_start` pelo WebSocket.
+2. O backend mantém o rastreio do nick mesmo quando a aba fecha. O alerta dura `ALERT_TTL_MS` (padrão 2 horas) e pode ser desativado no painel.
+3. Notificações padrão:
+   - alvo entrou, saiu ou trocou de sala;
+   - sala atual no momento em que o alerta é ativado.
+4. Opcional: **Avisar também quando alguém entrar ou sair da sala** (`occupants: true`).
+5. Clique na notificação abre o site já no nick monitorado.
+
+Se o navegador não suportar Push (ou a assinatura demorar), o painel cai no modo **aba aberta**: as notificações continuam enquanto a aba estiver aberta/minimizada. No iPhone, instale o site na tela inicial (iOS 16.4+) para o push funcionar.
+
+O backend guarda as assinaturas em memória. Se o Render reiniciar, reative os alertas no painel. O workflow `.github/workflows/keepalive.yml` faz um ping no `/health` a cada 5 minutos para evitar que o Render free durma; ele usa os minutos gratuitos de Actions de repositório público.
+
+### Mobile
+
+Abaixo de 640px o site muda para um layout compacto: hero curto, cards de alvo/sala lado a lado, ocupantes em 3 colunas e painel de alertas como bottom sheet. Tudo cabe na tela do celular sem precisar descer para ver sala e ocupantes.
 
 ---
 

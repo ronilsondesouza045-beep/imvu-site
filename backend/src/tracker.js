@@ -1275,7 +1275,7 @@ export class RadarTracker {
 
     const endpoint = subscription.endpoint;
     const existing = this.alerts.get(endpoint);
-    if (existing) this.removeAlert(existing, { destroyIfEmpty: false });
+    if (existing) this.removeAlert(existing);
     if (!existing && this.alerts.size >= MAX_ALERTS) {
       throw new Error("limite de alertas atingido");
     }

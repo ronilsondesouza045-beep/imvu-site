@@ -337,7 +337,7 @@
       let text = "Alertas desativados";
       if (alerts.busy) {
         kind = "is-warn";
-        text = "Ativando alertas...";
+        text = "Ativando alertas... aguarde até 30s";
       } else if (alerts.permission === "denied") {
         kind = "is-error";
         text = "Permissão de notificação negada";
@@ -362,13 +362,16 @@
 
     if (els.alertsInfo) {
       let info = "";
-      if (!state.currentNick) {
-        info = "Vigie um nick primeiro e ative os alertas.";
+      if (alerts.busy) {
+        info = "Preparando a assinatura push. Pode levar até 30s...";
       } else if (alerts.enabled) {
+        const monitored = alerts.nick || state.currentNick || "nick";
         info =
           alerts.mode === "push"
-            ? `Monitorando @${alerts.nick || state.currentNick}. Pode fechar o site: o push continua.`
-            : `Monitorando @${alerts.nick || state.currentNick}. Mantenha a aba aberta em segundo plano.`;
+            ? `Monitorando @${monitored}. Pode fechar o site: o push continua.`
+            : `Monitorando @${monitored}. Mantenha a aba aberta em segundo plano.`;
+      } else if (!state.currentNick) {
+        info = "Vigie um nick primeiro e ative os alertas.";
       } else if (alerts.pushEnabled) {
         info = `Pronto para ativar alertas para @${state.currentNick}.`;
       } else {
@@ -1381,9 +1384,13 @@
     state.watching = false;
     state.currentNick = "";
     wsSend({ type: "stop" });
-    if (alerts.enabled) disableAlerts({ silent: true }).catch(() => {});
     resetToIdle();
-    toast("Monitoramento parado", { kind: "info", detail: "O radar não está mais vigiando esse nick." });
+    toast("Monitoramento parado", {
+      kind: "info",
+      detail: alerts.enabled
+        ? "Os alertas continuam ativos no painel."
+        : "O radar não está mais vigiando esse nick.",
+    });
   });
 
   els.copyRoomBtn?.addEventListener("click", () => {
