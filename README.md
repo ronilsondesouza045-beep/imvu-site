@@ -46,14 +46,17 @@ imvu-site/
 │  ├─ src/
 │  │  ├─ imvu.js         # REST do IMVU (login, resolve, sala, roster, avatar)
 │  │  ├─ imq.js          # IMQ (connect, subscribe, unsubscribe, presença)
-│  │  └─ tracker.js      # orquestra alvo, sala, ocupantes e eventos
+│  │  ├─ tracker.js      # rastreador (não alterado pelo módulo de rádio)
+│  │  └─ musicBot.js     # bot de rádio (@imvu/client + @imvu/imq)
 │  ├─ package.json
 │  ├─ .env               # credenciais + portas (NÃO commitar)
 │  └─ .env.example
 ├─ frontend/
 │  ├─ index.html
 │  ├─ style.css
-│  ├─ app.js
+│  ├─ app.js             # rastreador
+│  ├─ radio.js           # aba Rádio para Sala
+│  ├─ sw.js / manifest.json / icons/
 │  ├─ config.js          # URL do backend no deploy
 │  ├─ vercel.json
 │  └─ netlify.toml
@@ -122,11 +125,19 @@ MAX_WATCHERS=20
 TARGET_ROOM_SCAN=800
 OWN_ROOM_SCAN=120
 CATVU_RETRY_MS=20000
+
+# Music Bot (conta separada)
+BOT_EMAIL=seu_email_do_bot@gmail.com
+BOT_PASSWORD=sua_senha_do_bot
+BOT_USERNAME=nome_do_bot
+BOT_SEND_INTERVAL_MS=1500
 ```
 
 | Variável | Para que serve |
 |---|---|
-| `IMVU_USER` / `IMVU_PASS` | conta usada pelo backend para login e IMQ |
+| `IMVU_USER` / `IMVU_PASS` | conta usada pelo rastreador para login e IMQ |
+| `BOT_EMAIL` / `BOT_USERNAME` / `BOT_PASSWORD` | conta do bot de rádio (use uma conta separada do rastreador) |
+| `BOT_SEND_INTERVAL_MS` | intervalo mínimo entre mensagens do bot (padrão 1500 ms) |
 | `CORS_ORIGIN` | `*` ou lista de origens separadas por vírgula |
 | `MAX_WATCHERS` | limite de navegadores vigiando ao mesmo tempo |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | chaves Web Push (gere com `npx web-push generate-vapid-keys --json`) |
@@ -141,7 +152,7 @@ CATVU_RETRY_MS=20000
 | `PROBE_TIMEOUT_MS` | timeout do probe (padrão 12000) |
 | `ROOM_REFRESH_MS` | atualização periódica do roster (padrão 20000) |
 
-A conta em `IMVU_USER` precisa existir e conseguir logar na API. Use uma conta dedicada; nunca coloque as credenciais no frontend.
+A conta em `IMVU_USER` precisa existir e conseguir logar na API. Use uma conta dedicada; nunca coloque as credenciais no frontend. A conta do bot (`BOT_*`) deve ser **outra** conta, com permissão para entrar na sala onde o DJ vai tocar.
 
 ---
 
@@ -238,6 +249,55 @@ O backend guarda as assinaturas em memória. Se o Render reiniciar, reative os a
 ### Mobile
 
 Abaixo de 640px o site muda para um layout compacto: hero curto, cards de alvo/sala lado a lado, ocupantes em 3 colunas e painel de alertas como bottom sheet. Tudo cabe na tela do celular sem precisar descer para ver sala e ocupantes.
+
+### Music Bot / Rádio para Sala
+
+O site ganhou a aba **🎧 Rádio para Sala**, com um módulo separado do rastreador. O bot usa `@imvu/client` e `@imvu/imq` para logar, entrar na sala, ouvir o chat e responder aos comandos.
+
+**Conta separada é obrigatória.** O bot precisa de uma conta IMVU diferente de `IMVU_USER` (a conta do rastreador). Se as duas usarem a mesma conta, o login do bot pode derrubar a sessão do radar.
+
+Configuração em `backend/.env`:
+
+```env
+BOT_EMAIL=seu_email_do_bot@gmail.com
+BOT_PASSWORD=sua_senha_do_bot
+BOT_USERNAME=nome_do_bot
+BOT_SEND_INTERVAL_MS=1500
+```
+
+No Render, adicione essas mesmas variáveis em **Environment** (a `.env` local não sobe para o deploy). Sem elas, a aba mostra **Bot não configurado** e o endpoint retorna 503.
+
+**Dependências e execução:**
+
+```powershell
+cd C:\Users\ronis\Desktop\imvu-site\backend
+npm install @imvu/client @imvu/imq dotenv
+node server.js
+```
+
+**Como usar:**
+
+1. Abra o site e clique na aba **🎧 Rádio para Sala**.
+2. Cole o ID da sua sala (ex.: `391509865-1`) e clique em **Ativar DJ Bot**.
+3. Dentro do chat da sala, digite:
+   - `!play` — o bot responde `🎵 Tocando agora: [rádio]` e manda o link;
+   - `!skip` — troca para a próxima rádio da lista;
+   - `!stop` — avisa no chat, para e sai da sala.
+4. O botão **Desconectar bot** chama `POST /api/bot/leave` e encerra a sessão do bot.
+
+**Anti-ban:** toda mensagem passa por uma fila com intervalo mínimo de **1500 ms** entre envios, inclusive a primeira depois de entrar. O `!stop` espera a fila e só então sai. Há também cooldown de 2,5 s por usuário e limite de 12 mensagens pendentes.
+
+**Endpoints:**
+
+| Método | Rota | Função |
+|---|---|---|
+| `POST` | `/api/bot/join` | body `{ "roomId": "391509865-1" }`; loga e entra na sala |
+| `POST` | `/api/bot/leave` | sai da sala e faz logout do bot |
+| `GET` | `/api/bot/status` | estado do bot, sala atual, rádio e erros |
+
+A lista de rádios fica em `backend/src/musicBot.js` (`RADIOS`). Troque `name` e `url` para usar suas estações. O bot envia o link público no chat; ele não reproduz áudio dentro do IMVU.
+
+O bot precisa ter permissão para entrar na sala (dono, amigo ou convite). Use apenas na sua sala privada. As rotas têm limite de uma entrada a cada 8 s por IP; se quiser fechar mais o acesso, coloque autenticação na frente delas.
 
 ---
 

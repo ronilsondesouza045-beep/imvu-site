@@ -22,4 +22,12 @@ services:
       - key: TARGET_ROOM_SCAN
         value: "800"
       - key: OWN_ROOM_SCAN
-        value: "60"
+        value: "120"
+      - key: BOT_EMAIL
+        sync: false
+      - key: BOT_PASSWORD
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: BOT_SEND_INTERVAL_MS
+        value: "1500"

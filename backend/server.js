@@ -8,6 +8,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { RadarTracker } from "./src/tracker.js";
 import { safeNick } from "./src/imvu.js";
 import { pushAvailable, pushPublicKey } from "./src/push.js";
+import { musicBot } from "./src/musicBot.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -84,6 +85,73 @@ app.get("/api/resolve", async (req, res) => {
 
 app.get("/api/push/key", (_req, res) => {
   res.json({ enabled: pushAvailable(), key: pushPublicKey() });
+});
+
+// ---------------- Music Bot / Radio ----------------
+
+const botActionTimes = new Map();
+
+function allowBotAction(key, intervalMs) {
+  const now = Date.now();
+  const previous = botActionTimes.get(key) || 0;
+  if (now - previous < intervalMs) return false;
+  botActionTimes.set(key, now);
+  if (botActionTimes.size > 500) {
+    const oldest = botActionTimes.keys().next().value;
+    if (oldest) botActionTimes.delete(oldest);
+  }
+  return true;
+}
+
+app.get("/api/bot/status", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, status: musicBot.status() });
+});
+
+app.post("/api/bot/join", async (req, res) => {
+  const ip = String(req.ip || req.socket.remoteAddress || "unknown");
+  if (!allowBotAction(`join:${ip}`, 8_000)) {
+    res.status(429).json({ ok: false, error: "Aguarde alguns segundos antes de mover o bot de novo." });
+    return;
+  }
+
+  const roomId = String(req.body?.roomId || "").trim();
+  if (!/^\d+-\d+$/.test(roomId)) {
+    res.status(400).json({ ok: false, error: "ID de sala invalido. Use o formato 123456-1." });
+    return;
+  }
+
+  try {
+    const status = await musicBot.join(roomId);
+    res.json({ ok: true, status });
+  } catch (error) {
+    const status = musicBot.status();
+    const code = status.configured ? 502 : 503;
+    res.status(code).json({
+      ok: false,
+      error: error?.message || "Falha ao entrar na sala.",
+      status,
+    });
+  }
+});
+
+app.post("/api/bot/leave", async (req, res) => {
+  const ip = String(req.ip || req.socket.remoteAddress || "unknown");
+  if (!allowBotAction(`leave:${ip}`, 2_500)) {
+    res.status(429).json({ ok: false, error: "Aguarde um instante para desconectar." });
+    return;
+  }
+
+  try {
+    const status = await musicBot.leave({ logout: true });
+    res.json({ ok: true, status });
+  } catch (error) {
+    res.status(502).json({
+      ok: false,
+      error: error?.message || "Falha ao desconectar o bot.",
+      status: musicBot.status(),
+    });
+  }
 });
 
 app.get("/api/avatar", async (req, res) => {
@@ -275,6 +343,7 @@ function shutdown(signal) {
     /* ignora */
   }
   tracker.destroy();
+  void musicBot.shutdown().catch(() => {});
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5_000).unref();
 }
