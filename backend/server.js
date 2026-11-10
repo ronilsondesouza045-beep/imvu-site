@@ -7,6 +7,7 @@ import cors from "cors";
 import { WebSocket, WebSocketServer } from "ws";
 import { RadarTracker } from "./src/tracker.js";
 import { safeNick } from "./src/imvu.js";
+import { findRooms as catvuFind } from "./src/catvu.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -79,6 +80,41 @@ app.get("/api/resolve", async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error?.message || String(error) });
   }
+});
+
+app.get("/api/diag", async (req, res) => {
+  const nick = safeNick(req.query.nick || "xProf");
+  if (!nick) {
+    res.status(400).json({ error: "nick obrigatorio" });
+    return;
+  }
+  const logged = await tracker.ensureLogin();
+  if (!logged) {
+    res.status(503).json({ error: tracker.api.lastError || "login falhou" });
+    return;
+  }
+  const person = await tracker.api.resolve(nick);
+  if (!person) {
+    res.status(404).json({ error: "nick nao encontrado" });
+    return;
+  }
+  const cid = person.cid;
+  const catvu = await catvuFind(nick, { timeout: 12_000, force: true });
+  const paths = [
+    `/api/avatarcard.php?cid=${cid}`,
+    `/api/users/get_user_current_room.php?cid=${cid}`,
+    `/api/rooms/user_current_room.php?cid=${cid}`,
+    `/api/rooms/current_room.php?cid=${cid}`,
+    `/api/users/user_location.php?cid=${cid}`,
+    `/api/rooms/room_of_user.php?cid=${cid}`,
+    `/api/rooms/room_info.php?room_id=${cid}-1`,
+  ];
+  const calls = {};
+  for (const path of paths) {
+    const result = await tracker.api.clientDynamic(path);
+    calls[path] = { status: result.status, body: String(result.text || "").slice(0, 1200) };
+  }
+  res.json({ nick, cid, profile: person, catvu, calls });
 });
 
 app.get("/api/avatar", async (req, res) => {
