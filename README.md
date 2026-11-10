@@ -256,6 +256,8 @@ O site ganhou a aba **🎧 Rádio para Sala**, com um módulo separado do rastre
 
 **Conta separada é obrigatória.** O bot precisa de uma conta IMVU diferente de `IMVU_USER` (a conta do rastreador). Se as duas usarem a mesma conta, o login do bot pode derrubar a sessão do radar.
 
+A conta do bot também precisa ser **registrada** (username sem `Guest_`). Contas Guest/recém-criadas costumam ser recusadas pelo IMVU no join com `CHAT_PARTICIPANT-011`, mesmo em salas públicas abertas. Complete o cadastro/verificação da conta ou use outra conta registrada e atualize `BOT_USERNAME`.
+
 Configuração em `backend/.env`:
 
 ```env
