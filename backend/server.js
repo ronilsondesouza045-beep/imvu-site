@@ -7,7 +7,6 @@ import cors from "cors";
 import { WebSocket, WebSocketServer } from "ws";
 import { RadarTracker } from "./src/tracker.js";
 import { safeNick } from "./src/imvu.js";
-import { findRooms as catvuFind } from "./src/catvu.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -82,10 +81,16 @@ app.get("/api/resolve", async (req, res) => {
   }
 });
 
-app.get("/api/diag", async (req, res) => {
-  const nick = safeNick(req.query.nick || "xProf");
-  if (!nick) {
-    res.status(400).json({ error: "nick obrigatorio" });
+// Endpoint temporario de teste de sala privada. Remover depois da validacao.
+app.post("/api/dev/room", async (req, res) => {
+  if (req.headers["x-dev-token"] !== "radar-test-2026") {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  const action = req.body?.action === "leave" ? "leave" : "enter";
+  const rid = String(req.body?.rid || "");
+  if (!/^\d+-\d+$/.test(rid)) {
+    res.status(400).json({ error: "rid invalido" });
     return;
   }
   const logged = await tracker.ensureLogin();
@@ -93,72 +98,13 @@ app.get("/api/diag", async (req, res) => {
     res.status(503).json({ error: tracker.api.lastError || "login falhou" });
     return;
   }
-  const person = await tracker.api.resolve(nick);
-  if (!person) {
-    res.status(404).json({ error: "nick nao encontrado" });
-    return;
-  }
-  const cid = person.cid;
-  const catvu = await catvuFind(nick, { timeout: 20_000, force: true });
-  let jinaTest = null;
-  try {
-    const jinaResponse = await fetch(
-      `https://r.jina.ai/http://catvu.live/api/private-room/find?username=${encodeURIComponent(nick)}`,
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-          Accept: "text/plain",
-        },
-        signal: AbortSignal.timeout(25_000),
-      }
-    );
-    jinaTest = {
-      status: jinaResponse.status,
-      body: String(await jinaResponse.text()).slice(0, 1200),
-    };
-  } catch (error) {
-    jinaTest = { error: String(error?.message || error) };
-  }
-  const userNode = await tracker.api.getJson(`/user/user-${cid}`).catch(() => null);
-  const presenceNode = await tracker.api.getJson(`/presence/presence-${cid}`).catch(() => null);
-  const probes = {};
-  for (const path of [
-    `/user/user-${cid}/current_room`,
-    `/user/user-${cid}/room`,
-    `/presence/presence-${cid}/current_room`,
-    `/presence/presence-${cid}/room`,
-    `/presence/presence-${cid}/chat`,
-  ]) {
-    const result = await tracker.api.raw(path).catch(() => null);
-    probes[path] = result ? { status: result.status, body: String(result.text || "").slice(0, 500) } : null;
-  }
-  const paths = [
-    `/api/avatarcard.php?cid=${cid}`,
-    `/api/users/get_user_current_room.php?cid=${cid}`,
-    `/api/rooms/user_current_room.php?cid=${cid}`,
-    `/api/rooms/current_room.php?cid=${cid}`,
-    `/api/users/user_location.php?cid=${cid}`,
-    `/api/rooms/room_of_user.php?cid=${cid}`,
-    `/api/rooms/room_info.php?room_id=${cid}-1`,
-  ];
-  const calls = {};
-  for (const path of paths) {
-    const result = await tracker.api.clientDynamic(path);
-    const limit = path.includes("avatarcard") ? 200_000 : 1_200;
-    calls[path] = { status: result.status, body: String(result.text || "").slice(0, limit) };
-  }
+  const result =
+    action === "leave" ? await tracker.api.leaveRoom(rid) : await tracker.api.enterRoom(rid);
   res.json({
-    nick,
-    cid,
-    profile: person,
-    env: { render: process.env.RENDER || null, catvuMode: process.env.CATVU_MODE || null },
-    catvu,
-    jinaTest,
-    userNode,
-    presenceNode,
-    probes,
-    calls,
+    ok: Boolean(result?.status >= 200 && result?.status < 300),
+    action,
+    status: result?.status || 0,
+    body: String(result?.text || "").slice(0, 600),
   });
 });
 

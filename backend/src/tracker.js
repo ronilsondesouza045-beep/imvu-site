@@ -771,6 +771,10 @@ export class RadarTracker {
    * Depois disso o IMQ (chat-<roomId>) mantem joined/left em tempo real.
    */
   async loadCatvuSnapshot(track, rid) {
+    if (process.env.RENDER === "true") {
+      track.catvuSnapshotAt = now();
+      return;
+    }
     if (this.tracks.get(track.cid) !== track || track.room?.roomId !== rid) return;
     if (track.catvuSnapshotLoading) return;
     if (track.catvuSnapshotAt && now() - track.catvuSnapshotAt < 15_000) return;

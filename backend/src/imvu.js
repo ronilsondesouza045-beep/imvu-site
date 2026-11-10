@@ -634,28 +634,23 @@ export class ImvuApi {
     return hits;
   }
 
-  /** Chamadas aos endpoints legacy/web do IMVU (client-dynamic). */
-  async clientDynamic(path, { timeout = 20_000 } = {}) {
-    const url = String(path || "").startsWith("http")
-      ? String(path)
-      : `https://client-dynamic.imvu.com${String(path || "")}`;
-    const headers = {
-      "User-Agent": this.ua,
-      Accept: "application/json, text/plain, */*",
-      Origin: "https://www.imvu.com",
-      Referer: "https://www.imvu.com/",
-    };
-    if (this.cookies.size) headers.Cookie = this.cookieHeader();
-    if (this.sauce) {
-      headers["x-imvu-sauce"] = this.sauce;
-      headers["x-imvu-application"] = "next_desktop/1";
-    }
-    try {
-      const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeout) });
-      return { status: response.status, text: await response.text() };
-    } catch (error) {
-      return { status: 0, text: error?.message || String(error) };
-    }
+  async enterRoom(rid) {
+    const id = String(rid || "");
+    if (!/^\d+-\d+$/.test(id)) return { status: 0, text: "roomId invalido" };
+    return this.raw(`/chat/chat-${id}/participants`, {
+      method: "POST",
+      body: { id: `${API}/user/user-${this.cid}` },
+      withSauce: true,
+    });
+  }
+
+  async leaveRoom(rid) {
+    const id = String(rid || "");
+    if (!/^\d+-\d+$/.test(id)) return { status: 0, text: "roomId invalido" };
+    return this.raw(`/chat/chat-${id}/participants/user-${this.cid}`, {
+      method: "DELETE",
+      withSauce: true,
+    });
   }
 
   async fetchImage(url) {
