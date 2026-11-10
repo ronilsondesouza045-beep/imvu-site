@@ -105,6 +105,17 @@ class MusicBot {
       );
     }
 
+    const trackerUser = clean(process.env.IMVU_USER);
+    if (
+      credentials.username &&
+      trackerUser &&
+      credentials.username.toLowerCase() === trackerUser.toLowerCase()
+    ) {
+      throw new Error(
+        "A conta do bot e a mesma do rastreador (IMVU_USER). Use uma conta separada para o bot."
+      );
+    }
+
     const candidates = [...new Set([credentials.username, credentials.email].filter(Boolean))];
     this.loginPromise = (async () => {
       let lastError = null;
