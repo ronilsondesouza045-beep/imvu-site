@@ -410,6 +410,7 @@
     if (alerts.registration) return alerts.registration;
     try {
       alerts.registration = await navigator.serviceWorker.register("sw.js");
+      await navigator.serviceWorker.ready.catch(() => {});
       return alerts.registration;
     } catch {
       return null;
@@ -547,6 +548,13 @@
     return true;
   }
 
+  function withTimeout(promise, ms, message) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+    ]);
+  }
+
   async function enableAlerts() {
     if (alerts.busy) return;
     if (!state.currentNick) {
@@ -576,9 +584,24 @@
       if (!registration) throw new Error("service worker indisponível");
 
       const pushReady = await fetchPushConfig();
+      let subscription = null;
+      let pushError = null;
       if (pushReady) {
-        const subscription = await getPushSubscription();
-        if (!subscription) throw new Error("não foi possível criar a assinatura push");
+        try {
+          subscription = await withTimeout(
+            getPushSubscription(),
+            30_000,
+            "tempo esgotado ao criar a assinatura push"
+          );
+        } catch (error) {
+          pushError = error;
+          subscription = null;
+          window.__radarPushError = String(error?.stack || error?.message || error);
+          console.warn("[alerts] push falhou", error);
+        }
+      }
+
+      if (subscription) {
         alerts.subscription = subscription.toJSON ? subscription.toJSON() : subscription;
         alerts.mode = "push";
         alerts.enabled = true;
@@ -606,7 +629,9 @@
         alertLogAdd(`Alertas locais ativados para @${state.currentNick}`);
         toast("Alertas locais ativados", {
           kind: "success",
-          detail: "Mantenha a aba aberta (pode minimizar).",
+          detail: pushError
+            ? "Push indisponível agora; mantenha a aba aberta."
+            : "Mantenha a aba aberta (pode minimizar).",
         });
       }
     } catch (error) {
