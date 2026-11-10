@@ -274,6 +274,7 @@ class MusicBot {
       this.username = "";
     }
 
+    this.lastError = "";
     if (previousRoom) console.log(`[bot] saiu da sala ${previousRoom}`);
     return this.status();
   }
