@@ -250,15 +250,25 @@ export class ImvuApi {
     const env = await this.getJson("/user?username=" + encodeURIComponent(clean));
     const den = env?.denormalized;
     if (!den) return null;
+    const wanted = clean.toLowerCase();
+    let fallback = null;
     for (const [key, node] of Object.entries(den)) {
       if (!key.includes("/user/user-")) continue;
       const cid = cidFromUserUrl(key);
       if (!cid) continue;
       const person = this.personFromData(cid, node?.data);
       this.userCache.set(cid, { at: now(), person });
-      return person;
+      // A busca do IMVU e fuzzy: "irOni" pode devolver "Guest_Ironi".
+      // Prioriza sempre o username exato (ignorando caixa).
+      if (String(person.username || "").toLowerCase() === wanted) return person;
+      if (!fallback) fallback = person;
     }
-    return null;
+    if (fallback) {
+      this.log.info(
+        `[imvu] resolve("${clean}") sem match exato; usando ${fallback.username} (${fallback.cid})`
+      );
+    }
+    return fallback;
   }
 
   async resolveCid(cid) {

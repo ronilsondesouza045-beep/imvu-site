@@ -23,6 +23,9 @@ const PROBE_TIMEOUT_MS = envInt("PROBE_TIMEOUT_MS", 12_000);
 // Com salas ativas, refaz a varredura das filas chat-<cid>-* para descobrir
 // salas adicionais (multi-room). Sem sala, o probe continua a cada 15s.
 const MULTI_PROBE_MS = envInt("MULTI_PROBE_MS", 60_000);
+// Estado "oculto" nao pode ser permanente: a privacidade do alvo pode mudar
+// (Show Current Room) ou a sala pode ficar visivel depois. Recheca a cada 60s.
+const HIDDEN_RETRY_MS = envInt("HIDDEN_RETRY_MS", 60_000);
 // Leitura da relation current_room a cada 5s: detecta troca de sala rapido.
 const ROOM_REFRESH_MS = envInt("ROOM_REFRESH_MS", 5_000);
 // Roster HTTP e metadados continuam mais espacados para nao estourar rate limit.
@@ -290,6 +293,27 @@ export class RadarTracker {
     if (!track.refreshLoopTimer) {
       track.refreshLoopTimer = setInterval(() => {
         if (this.tracks.get(track.cid) !== track) return;
+        if (track.locationHidden) {
+          if (now() - (track.locationHiddenAt || 0) < HIDDEN_RETRY_MS) return;
+          // Janela de rechecagem: libera as fontes por um tick. Se nada
+          // aparecer, rearma o estado hidden sem floodar o frontend.
+          track.locationHidden = false;
+          track.locationHiddenAt = now();
+          this.syncCurrentRoom(track)
+            .then((found) => {
+              if (!found && !track.rooms.size && this.tracks.get(track.cid) === track) {
+                track.locationHidden = true;
+                track.locationHiddenAt = now();
+              }
+            })
+            .catch(() => {
+              if (!track.rooms.size && this.tracks.get(track.cid) === track) {
+                track.locationHidden = true;
+                track.locationHiddenAt = now();
+              }
+            });
+          return;
+        }
         // current_room: barato e a cada tick (deteccao de troca de sala).
         this.syncCurrentRoom(track).catch(() => {});
         if (!track.rooms.size) return;
