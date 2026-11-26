@@ -12,10 +12,8 @@
   const els = {
     radarView: $("#radarView"),
     radioView: $("#radioView"),
-    helpView: $("#helpView"),
     tabRadar: $("#tabRadar"),
     tabRadio: $("#tabRadio"),
-    tabHelp: $("#tabHelp"),
     maintenance: $("#radioMaintenance"),
     maintenanceText: $("#radioMaintenanceText"),
     adminWarning: $("#radioAdminWarning"),
@@ -404,35 +402,25 @@
 
   function setView(view) {
     const isRadio = view === "radio";
-    const isHelp = view === "help";
-    els.radarView?.classList.toggle("hidden", isRadio || isHelp);
+    els.radarView?.classList.toggle("hidden", isRadio);
     els.radioView?.classList.toggle("hidden", !isRadio);
-    els.helpView?.classList.toggle("hidden", !isHelp);
-    els.tabRadar?.classList.toggle("is-active", !isRadio && !isHelp);
+    els.tabRadar?.classList.toggle("is-active", !isRadio);
     els.tabRadio?.classList.toggle("is-active", isRadio);
-    els.tabHelp?.classList.toggle("is-active", isHelp);
-    document.body.dataset.view = isHelp ? "help" : isRadio ? "radio" : "radar";
-    if (isHelp) {
-      if (window.location.hash !== "#ajuda") history.replaceState(null, "", "#ajuda");
-    } else if (window.location.hash === "#ajuda") {
+    document.body.dataset.view = isRadio ? "radio" : "radar";
+    // Links antigos de ajuda caem no radar.
+    if (window.location.hash === "#ajuda") {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
     if (isRadio) {
       document.title = "DJ para Sala — IMVU Radar";
       fetchStatus({ silent: true });
-    } else if (isHelp) {
-      document.title = "Ajuda — IMVU Radar";
     } else {
       document.title = "IMVU Radar — presença em tempo real";
     }
   }
 
-  // app.js usa para abrir o tutorial a partir do card "Localização Indisponível".
-  window.radarSetView = setView;
-
   els.tabRadar?.addEventListener("click", () => setView("radar"));
   els.tabRadio?.addEventListener("click", () => setView("radio"));
-  els.tabHelp?.addEventListener("click", () => setView("help"));
   els.form?.addEventListener("submit", joinBot);
   els.songForm?.addEventListener("submit", requestSong);
   els.disconnectBtn?.addEventListener("click", leaveBot);
@@ -447,8 +435,6 @@
   const initialView = String(params.get("view") || "").toLowerCase();
   if (initialView === "radio") {
     setView("radio");
-  } else if (initialView === "help" || window.location.hash === "#ajuda") {
-    setView("help");
   } else {
     setView("radar");
   }

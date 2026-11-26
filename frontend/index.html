@@ -65,7 +65,6 @@
       <nav class="view-tabs" aria-label="Seções do site">
         <button id="tabRadar" class="view-tab is-active" type="button" data-view="radar">📡 Radar</button>
         <button id="tabRadio" class="view-tab" type="button" data-view="radio">🎧 Rádio para Sala</button>
-        <button id="tabHelp" class="view-tab" type="button" data-view="help">❓ Ajuda</button>
       </nav>
 
       <div id="radarView">
@@ -221,7 +220,6 @@
                 Este usuário pode ter desativado a opção <strong>Show Current Room</strong> no perfil do IMVU.
                 Para permitir o rastreamento, ele precisa ativar essa opção nas configurações de privacidade.
               </p>
-              <a id="roomHiddenHelpBtn" class="btn-primary mt-4" href="#ajuda" role="button">Ver como ativar</a>
             </div>
 
             <div id="roomContent" class="hidden pt-4">
@@ -413,64 +411,6 @@
               <span class="mono">!play nome-da-musica · !skip · !stop</span>
             </div>
           </article>
-        </section>
-      </div>
-
-      <div id="helpView" class="hidden">
-        <section class="card mt-8 p-6 sm:p-8">
-          <span class="eyebrow">Ajuda</span>
-          <h1 class="font-display mt-3 max-w-2xl text-3xl font-bold leading-tight sm:text-4xl">
-            Como permitir que sua sala apareça
-          </h1>
-          <p class="mt-3 max-w-2xl text-sm leading-relaxed text-slate-400">
-            O IMVU só mostra a sala atual de um usuário se a opção <strong>Show Current Room</strong> estiver ativa.
-            Se ela estiver em <strong>Profile Only</strong> ou <strong>None</strong>, o radar não consegue descobrir a
-            sala e exibe <strong>Localização Indisponível</strong>.
-          </p>
-
-          <div class="mt-6 grid gap-4 md:grid-cols-3">
-            <article class="rounded-xl border border-white/5 bg-black/20 p-4">
-              <div class="eyebrow-sm">IMVU Desktop / Web</div>
-              <ol class="mt-3 space-y-2 text-sm leading-relaxed text-slate-300">
-                <li>1. Clique na sua foto no canto superior direito.</li>
-                <li>2. Abra <strong>Edit Profile</strong>.</li>
-                <li>3. Em <strong>Room Settings</strong>, ative <strong>Show Current Room</strong>.</li>
-                <li>4. Escolha <strong>Everywhere</strong> ou <strong>Recommendations Only</strong>.</li>
-                <li>5. Clique em <strong>Save</strong>.</li>
-              </ol>
-            </article>
-
-            <article class="rounded-xl border border-white/5 bg-black/20 p-4">
-              <div class="eyebrow-sm">IMVU Classic</div>
-              <ol class="mt-3 space-y-2 text-sm leading-relaxed text-slate-300">
-                <li>1. Abra <strong>Settings</strong>.</li>
-                <li>2. Vá em <strong>General</strong>.</li>
-                <li>3. Marque <strong>Show my room location</strong>.</li>
-              </ol>
-            </article>
-
-            <article class="rounded-xl border border-white/5 bg-black/20 p-4">
-              <div class="eyebrow-sm">IMVU Mobile</div>
-              <ol class="mt-3 space-y-2 text-sm leading-relaxed text-slate-300">
-                <li>1. Toque na sua foto de perfil.</li>
-                <li>2. Toque em <strong>Edit</strong>.</li>
-                <li>3. Em <strong>Privacy</strong>, ative <strong>Room Location</strong>.</li>
-                <li>4. Salve.</li>
-              </ol>
-            </article>
-          </div>
-
-          <div class="mt-6 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm leading-relaxed text-amber-100/80">
-            <strong>Everywhere</strong> mostra a sala para todos. <strong>Recommendations Only</strong> mostra para
-            amigos na seção “Join Your Friends”. <strong>Profile Only</strong> e <strong>None</strong> escondem a sala
-            do radar.
-          </div>
-
-          <p class="mt-6 text-xs leading-relaxed text-slate-500">
-            Depois de ativar, volte ao Radar e clique em <strong>Vigiar</strong> novamente. A sala deve aparecer em
-            alguns segundos. O radar continua funcionando para salas públicas e para o próprio alvo; só a localização
-            de terceiros depende dessa opção.
-          </p>
         </section>
       </div>
 

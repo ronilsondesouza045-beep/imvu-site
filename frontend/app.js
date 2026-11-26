@@ -85,7 +85,6 @@
     roomEmptyText: $("#roomEmptyText"),
     roomHidden: $("#roomHidden"),
     roomHiddenText: $("#roomHiddenText"),
-    roomHiddenHelpBtn: $("#roomHiddenHelpBtn"),
     roomContent: $("#roomContent"),
     roomName: $("#roomName"),
     roomPrivacy: $("#roomPrivacy"),
@@ -1459,18 +1458,6 @@
 
   els.copyRoomBtn?.addEventListener("click", () => {
     copyText(els.copyRoomBtn.dataset.link || "", "Link copiado");
-  });
-
-  els.roomHiddenHelpBtn?.addEventListener("click", (event) => {
-    event.preventDefault();
-    if (typeof window.radarSetView === "function") {
-      window.radarSetView("help");
-    } else {
-      document.getElementById("tabHelp")?.click();
-    }
-    if (window.location.hash !== "#ajuda") {
-      history.replaceState(null, "", "#ajuda");
-    }
   });
 
   els.alertsBtn?.addEventListener("click", alertsOpen);
