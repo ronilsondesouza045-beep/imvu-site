@@ -35,6 +35,12 @@ services:
         sync: false
       - key: BOT_SEND_INTERVAL_MS
         value: "1500"
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: MAX_TELEGRAM_ALVOS
+        value: "30"
+      - key: MAX_TELEGRAM_ALVOS_POR_CHAT
+        value: "3"
       - key: PUBLIC_BASE_URL
         sync: false
       - key: RADIO_SECRET

@@ -10,6 +10,7 @@ import { safeNick } from "./src/imvu.js";
 import { pushAvailable, pushPublicKey } from "./src/push.js";
 import { musicBot } from "./src/musicBot.js";
 import { radioStream } from "./src/radioStream.js";
+import { initTelegramBot } from "./src/telegramBot.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -32,6 +33,11 @@ const tracker = new RadarTracker({
   password: process.env.IMVU_PASS,
   log,
 });
+
+// Bot do Telegram: le/grava telegram_alvos e envia alertas quando o
+// tracker detecta troca de sala (hook chamado dentro do setRoom).
+const telegram = initTelegramBot({ tracker, log });
+tracker.onRoomChange = (track, previousRoom) => telegram.notifyRoomChange(track, previousRoom);
 
 const app = express();
 app.disable("x-powered-by");
@@ -84,6 +90,7 @@ app.get("/health", (_req, res) => {
     version: VERSION,
     uptime: Math.round(process.uptime()),
     ...tracker.stats(),
+    telegram: telegram.stats(),
     now: Date.now(),
   });
 });
@@ -423,6 +430,7 @@ function shutdown(signal) {
   }
   tracker.destroy();
   radioStream.shutdown();
+  telegram.stop();
   void musicBot.shutdown().catch(() => {});
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5_000).unref();
@@ -440,4 +448,5 @@ process.on("unhandledRejection", (error) => {
 server.listen(PORT, () => {
   log.info(`[server] IMVU Radar backend v${VERSION} em http://localhost:${PORT}`);
   log.info(`[server] WebSocket no mesmo host/porta · max watchers ${MAX_WATCHERS}`);
+  log.info(`[server] Telegram bot: ${telegram.enabled ? "ativo" : "desligado (sem token)"}`);
 });

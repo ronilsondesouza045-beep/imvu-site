@@ -71,6 +71,8 @@ export class RadarTracker {
     this.roomRefs = new Map();
     this.alerts = new Map();
     this.imqStarted = false;
+    // Hook externo (Telegram, etc.): chamado quando um track troca de sala.
+    this.onRoomChange = null;
 
     this.imq = new ImqClient({
       log,
@@ -882,6 +884,15 @@ export class RadarTracker {
     this.broadcast(track, this.roomMessage(track));
     this.broadcast(track, this.statusMessage(track, "online", track.statusMsg));
     this.log.info(`[tracker] ${track.nick} -> ${fallbackRoom.name} (${id}) via ${via}`);
+
+    // Hook externo (ex.: alertas do Telegram). Nao interfere no fluxo do radar.
+    if (typeof this.onRoomChange === "function") {
+      try {
+        this.onRoomChange(track, previousRoom);
+      } catch (error) {
+        this.log.warn(`[tracker] onRoomChange falhou: ${error?.message || error}`);
+      }
+    }
 
     const [info, people] = await Promise.all([
       this.api.roomInfo(id, hint).catch(() => null),

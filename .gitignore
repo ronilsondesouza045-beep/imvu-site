@@ -8,6 +8,7 @@ npm-debug.log*
 .DS_Store
 .vercel/
 frontend/.netlify/
-backend/.env
+backend/.env*
 cookies.json
 backend/bin/
+backend/data/

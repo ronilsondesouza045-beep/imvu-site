@@ -1977,3 +1977,103 @@ kbd {
     padding-bottom: 56px;
   }
 }
+
+/* ---------- Banner Telegram ---------- */
+.telegram-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(34, 158, 217, 0.35);
+  background:
+    radial-gradient(120% 160% at 0% 0%, rgba(34, 158, 217, 0.22), transparent 55%),
+    linear-gradient(135deg, rgba(34, 158, 217, 0.14), rgba(13, 13, 22, 0.78));
+  box-shadow: 0 18px 40px -22px rgba(34, 158, 217, 0.55);
+}
+
+.telegram-banner-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.telegram-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2aabee, #229ed9);
+  color: #fff;
+  box-shadow: 0 10px 24px -10px rgba(42, 171, 238, 0.8);
+}
+
+.telegram-logo svg {
+  width: 22px;
+  height: 22px;
+}
+
+.telegram-banner-title {
+  margin: 0;
+  font-family: "Space Grotesk", Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  color: #eaf6ff;
+}
+
+.telegram-banner-title span {
+  color: #7fd0f8;
+}
+
+.telegram-banner-text {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #9db6c9;
+}
+
+.telegram-banner-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2aabee, #1d8fce);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 12px 26px -12px rgba(42, 171, 238, 0.9);
+}
+
+.telegram-banner-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px -12px rgba(42, 171, 238, 1);
+}
+
+.telegram-banner-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (max-width: 640px) {
+  .telegram-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 16px;
+  }
+
+  .telegram-banner-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
