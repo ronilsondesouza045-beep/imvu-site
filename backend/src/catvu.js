@@ -43,11 +43,8 @@ function parseJinaJson(text) {
  * nesse caso usa o Jina Reader, que acessa o catvu e devolve o JSON em texto.
  */
 async function fetchCatvuJson(url, { timeout = 30_000 } = {}) {
-  // O catvu bloqueia/estoura timeout nos IPs do Render. A fonte primaria
-  // de sala e o relations.current_room do IMVU; catvu fica para hosts locais.
-  if (process.env.RENDER === "true") {
-    throw new Error("catvu indisponivel no Render");
-  }
+  // O catvu bloqueia/estoura timeout nos IPs do Render. Lá a requisição
+  // direta é pulada e o Jina Reader faz o proxy (preferJina()).
   if (!preferJina()) {
     try {
       const direct = await fetch(url, {

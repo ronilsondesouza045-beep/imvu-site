@@ -68,6 +68,7 @@ export class ImvuApi {
 
     this.userCache = new Map();
     this.userNodeCache = new Map();
+    this.friendCidsCache = { at: 0, cids: new Set() };
     this.roomMetaCache = new Map();
     this.rosterCache = new Map();
     this.roomListCache = new Map();
@@ -506,6 +507,28 @@ export class ImvuApi {
     }
     this.roomListCache.set(key, { at: now(), rids });
     return rids;
+  }
+
+  /**
+   * cids dos amigos da conta do bot. Usado para confiar na sala da lista
+   * `friends` quando o roster da sala privada vem 403 e o alvo e o unico amigo.
+   */
+  async friendCids(ttl = 5 * 60_000) {
+    if (!this.cid) return new Set();
+    if (this.friendCidsCache && now() - this.friendCidsCache.at < ttl) {
+      return this.friendCidsCache.cids;
+    }
+    const env = await this.getJson(`/user/user-${this.cid}/friends?limit=200`);
+    const den = env?.denormalized;
+    if (!den) return this.friendCidsCache.cids || new Set();
+    const cids = new Set();
+    for (const [key, node] of Object.entries(den)) {
+      if (!node?.relations?.viewer_friend) continue;
+      const cid = cidFromUserUrl(key);
+      if (cid) cids.add(cid);
+    }
+    this.friendCidsCache = { at: now(), cids };
+    return cids;
   }
 
   async friendsRoomHints() {

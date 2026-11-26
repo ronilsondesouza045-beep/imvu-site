@@ -24,6 +24,8 @@ const PROBE_TIMEOUT_MS = envInt("PROBE_TIMEOUT_MS", 12_000);
 const ROOM_REFRESH_MS = envInt("ROOM_REFRESH_MS", 5_000);
 // Roster HTTP e metadados continuam mais espacados para nao estourar rate limit.
 const ROSTER_REFRESH_MS = envInt("ROSTER_REFRESH_MS", 15_000);
+// Lista de salas dos amigos: fonte real quando current_room nao existe.
+const FRIENDS_HINT_MS = envInt("FRIENDS_HINT_MS", 5_000);
 // Janela em que um evento de sala do IMQ vence uma relation "presa" na My Room.
 const PRESENCE_TRUST_MS = envInt("PRESENCE_TRUST_MS", 10 * 60_000);
 // Evita reabrir a sala que o alvo acabou de sair via evento left.
@@ -198,6 +200,7 @@ export class RadarTracker {
       lastLeftRoom: "",
       lastLeftAt: 0,
       lastRosterRefreshAt: 0,
+      friendsHintAt: 0,
       roomSetSeq: 0,
       catvu: null,
       catvuWatch: null,
@@ -408,20 +411,10 @@ export class RadarTracker {
     // Force no inicio: evita usar cache de uma sala anterior do mesmo nick.
     const catvuPromise = catvuFind(track.nick, { timeout: 10_000, force: true }).catch(() => null);
 
-    // 1) Lista de amigos do bot: o IMVU ja denormaliza a sala atual de cada amigo.
-    try {
-      const hints = await this.api.friendsRoomHints();
-      for (const hint of hints) {
-        if (!active()) return;
-        const people = await this.api.roster(hint.rid, 2_000);
-        if (people.some((person) => person.cid === cid)) {
-          await this.setRoom(track, hint.rid, { seed: people, via: "friends", gen });
-          return;
-        }
-      }
-    } catch {
-      /* sem lista de amigos acessivel */
-    }
+    // 1) Lista de amigos do bot: o IMVU denormaliza a sala atual de cada
+    // amigo. Inclui o fallback de sala privada (roster 403) do Tracker.kt.
+    this.emitStatus(track, "loading", "Consultando salas dos amigos...");
+    if (await this.checkFriendsRoom(track)) return;
     if (!active()) return;
 
     // 2) Catvu find: sala exata, sem depender de evento de movimento.
@@ -537,6 +530,58 @@ export class RadarTracker {
 
   // ---------------- probe ----------------
 
+  /**
+   * A lista `friends` do IMVU devolve as salas dos amigos. Para sala privada
+   * de terceiro o roster HTTP vem 403, entao confiamos na lista quando o
+   * bot tem um unico amigo — e esse amigo e o alvo (fallback do Tracker.kt).
+   */
+  async checkFriendsRoom(track) {
+    if (now() - (track.friendsHintAt || 0) < FRIENDS_HINT_MS) return false;
+    track.friendsHintAt = now();
+
+    const hints = await this.api.friendsRoomHints().catch(() => []);
+    if (!hints.length || this.tracks.get(track.cid) !== track) return false;
+
+    // 1) Sala publica: roster confirma o alvo.
+    for (const hint of hints) {
+      const people = await this.api.roster(hint.rid, 2_000).catch(() => []);
+      if (this.tracks.get(track.cid) !== track) return false;
+      if (people.some((person) => person.cid === track.cid)) {
+        if (track.room?.roomId !== hint.rid) {
+          this.setRoom(track, hint.rid, {
+            seed: people,
+            via: "friends",
+            hint,
+            gen: track.gen,
+          }).catch((error) => {
+            this.log.warn(`[tracker] friends setRoom(${hint.rid}) falhou: ${error?.message || error}`);
+          });
+        }
+        return true;
+      }
+    }
+
+    // 2) Sala privada: roster 403. Unico amigo + unica sala = sala do alvo.
+    if (hints.length === 1) {
+      const friends = await this.api.friendCids().catch(() => new Set());
+      if (this.tracks.get(track.cid) !== track) return false;
+      if (friends.size === 1 && friends.has(String(track.cid))) {
+        const hint = hints[0];
+        if (track.room?.roomId !== hint.rid) {
+          this.setRoom(track, hint.rid, {
+            via: "friends_private",
+            hint,
+            gen: track.gen,
+          }).catch((error) => {
+            this.log.warn(`[tracker] friends_private setRoom(${hint.rid}) falhou: ${error?.message || error}`);
+          });
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
   async syncCurrentRoom(track) {
     if (this.tracks.get(track.cid) !== track) return false;
     if (track.syncPromise) return track.syncPromise;
@@ -544,29 +589,36 @@ export class RadarTracker {
     track.syncPromise = (async () => {
       if (track.syncBackoffUntil && now() < track.syncBackoffUntil) return false;
 
-      // ttl 0 = sem cache: cada tick le a relation fresca, que e a fonte
-      // mais rapida para "o alvo entrou na sala de outra pessoa".
+      // ttl 0 = sem cache: cada tick le a relation fresca.
       const rid = await this.api.currentRoom(track.cid, 0).catch(() => "");
       if (this.tracks.get(track.cid) !== track) return false;
+
       if (!rid) {
         if (this.api.lastStatus === 429) {
           track.syncBackoffUntil = now() + RATE_LIMIT_BACKOFF_MS;
           this.log.warn(`[tracker] rate limit no current_room de ${track.nick}; pausando ${Math.round(RATE_LIMIT_BACKOFF_MS / 1000)}s`);
+          return false;
         }
-        return false;
+        track.syncBackoffUntil = 0;
+        // current_room nao existe para terceiros: a lista friends e a fonte.
+        return this.checkFriendsRoom(track);
       }
+
       track.syncBackoffUntil = 0;
       if (track.room?.roomId === rid) return true;
 
       // My Room na relation costuma ficar "presa" enquanto o alvo esta em
-      // sala de terceiro. Um evento recente do IMQ apontando outra sala vence.
+      // sala de terceiro. Lista de amigos/IMQ vencem essa leitura.
       const relationMyRoom = rid === `${track.cid}-1`;
-      const presenceFresh = Boolean(
-        track.presenceRoom &&
-          track.presenceRoom !== rid &&
-          now() - (track.presenceRoomAt || 0) < PRESENCE_TRUST_MS
-      );
-      if (relationMyRoom && presenceFresh) return false;
+      if (relationMyRoom) {
+        if (await this.checkFriendsRoom(track)) return true;
+        const presenceFresh = Boolean(
+          track.presenceRoom &&
+            track.presenceRoom !== rid &&
+            now() - (track.presenceRoomAt || 0) < PRESENCE_TRUST_MS
+        );
+        if (presenceFresh) return false;
+      }
 
       // Nao reabre a sala que o alvo acabou de sair (evento left do IMQ).
       if (rid === track.lastLeftRoom && now() - (track.lastLeftAt || 0) < LEFT_ROOM_GRACE_MS) {
@@ -947,13 +999,11 @@ export class RadarTracker {
    * Depois disso o IMQ (chat-<roomId>) mantem joined/left em tempo real.
    */
   async loadCatvuSnapshot(track, rid) {
-    if (process.env.RENDER === "true") {
-      track.catvuSnapshotAt = now();
-      return;
-    }
     if (this.tracks.get(track.cid) !== track || track.room?.roomId !== rid) return;
     if (track.catvuSnapshotLoading) return;
-    if (track.catvuSnapshotAt && now() - track.catvuSnapshotAt < 15_000) return;
+    // No Render a busca vai pelo Jina e é mais lenta: espaça mais.
+    const minInterval = process.env.RENDER === "true" ? 60_000 : 15_000;
+    if (track.catvuSnapshotAt && now() - track.catvuSnapshotAt < minInterval) return;
     track.catvuSnapshotLoading = true;
     try {
       const snapshot = await catvuRoomSnapshot(rid, track.nick, { timeout: 30_000 });
