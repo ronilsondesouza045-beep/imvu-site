@@ -30,6 +30,9 @@
     target: null,
     room: null,
     occupants: [],
+    locationHidden: false,
+    locationHiddenTitle: "",
+    locationHiddenText: "",
     status: "idle",
     statusText: "Aguardando",
     watchStartedAt: 0,
@@ -80,6 +83,9 @@
     roomEmpty: $("#roomEmpty"),
     roomEmptyTitle: $("#roomEmptyTitle"),
     roomEmptyText: $("#roomEmptyText"),
+    roomHidden: $("#roomHidden"),
+    roomHiddenText: $("#roomHiddenText"),
+    roomHiddenHelpBtn: $("#roomHiddenHelpBtn"),
     roomContent: $("#roomContent"),
     roomName: $("#roomName"),
     roomPrivacy: $("#roomPrivacy"),
@@ -766,6 +772,9 @@
 
       case "watching":
         state.target = message.target || null;
+        state.locationHidden = false;
+        state.locationHiddenTitle = "";
+        state.locationHiddenText = "";
         if (!state.watchStartedAt) state.watchStartedAt = Date.now();
         els.stopBtn?.classList.remove("hidden");
         if (els.watchBtn) {
@@ -798,6 +807,9 @@
         break;
 
       case "room": {
+        state.locationHidden = false;
+        state.locationHiddenTitle = "";
+        state.locationHiddenText = "";
         const previousRoomId = state.room?.roomId || "";
         const nextRoomId = message.room?.roomId || "";
         if (previousRoomId && nextRoomId && previousRoomId !== nextRoomId) {
@@ -826,7 +838,23 @@
         break;
       }
 
+      case "location_hidden":
+        state.locationHidden = true;
+        state.locationHiddenTitle = message.title || "Localização Indisponível";
+        state.locationHiddenText = message.message || "";
+        state.room = null;
+        state.occupants = [];
+        if (message.target) state.target = message.target;
+        renderTarget();
+        renderRoom();
+        renderOccupants();
+        setStatus("hidden", "Indisponível");
+        break;
+
       case "offline":
+        state.locationHidden = false;
+        state.locationHiddenTitle = "";
+        state.locationHiddenText = "";
         state.room = null;
         state.occupants = [];
         renderRoom();
@@ -835,6 +863,9 @@
         break;
 
       case "room_leave": {
+        state.locationHidden = false;
+        state.locationHiddenTitle = "";
+        state.locationHiddenText = "";
         const roomName = message.room?.name || message.room?.roomId || "sala";
         state.room = null;
         state.occupants = [];
@@ -1066,6 +1097,7 @@
       renderRoom();
       return;
     }
+    if (state.locationHidden) return;
     if (state.status === "loading") {
       if (els.roomEmptyTitle) els.roomEmptyTitle.textContent = "Procurando sala...";
       if (els.roomEmptyText) {
@@ -1090,6 +1122,21 @@
   function renderRoom() {
     const room = state.room;
     if (!room) {
+      if (state.locationHidden) {
+        els.roomEmpty?.classList.add("hidden");
+        els.roomContent?.classList.add("hidden");
+        els.roomHidden?.classList.remove("hidden");
+        if (els.roomHiddenText && state.locationHiddenText) {
+          els.roomHiddenText.textContent = state.locationHiddenText;
+        }
+        if (els.roomBackdrop) {
+          els.roomBackdrop.style.backgroundImage = "";
+          els.roomBackdrop.style.opacity = "0";
+        }
+        return;
+      }
+
+      els.roomHidden?.classList.add("hidden");
       els.roomEmpty?.classList.remove("hidden");
       els.roomContent?.classList.add("hidden");
       if (els.roomBackdrop) {
@@ -1100,6 +1147,7 @@
       return;
     }
 
+    els.roomHidden?.classList.add("hidden");
     els.roomEmpty?.classList.add("hidden");
     els.roomContent?.classList.remove("hidden");
 
@@ -1237,6 +1285,7 @@
       loading: "room-status status-loading",
       online: "room-status status-online",
       offline: "room-status status-offline",
+      hidden: "room-status status-hidden",
       error: "room-status status-error",
     };
     setClass(els.roomStatus, map[kind] || map.idle);
@@ -1320,6 +1369,9 @@
     state.target = null;
     state.room = null;
     state.occupants = [];
+    state.locationHidden = false;
+    state.locationHiddenTitle = "";
+    state.locationHiddenText = "";
     state.status = "idle";
     state.statusText = "Aguardando";
     state.watchStartedAt = 0;
@@ -1343,6 +1395,9 @@
     state.target = null;
     state.room = null;
     state.occupants = [];
+    state.locationHidden = false;
+    state.locationHiddenTitle = "";
+    state.locationHiddenText = "";
     state.status = "loading";
     state.statusText = "Conectando...";
     state.watchStartedAt = Date.now();
@@ -1404,6 +1459,18 @@
 
   els.copyRoomBtn?.addEventListener("click", () => {
     copyText(els.copyRoomBtn.dataset.link || "", "Link copiado");
+  });
+
+  els.roomHiddenHelpBtn?.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (typeof window.radarSetView === "function") {
+      window.radarSetView("help");
+    } else {
+      document.getElementById("tabHelp")?.click();
+    }
+    if (window.location.hash !== "#ajuda") {
+      history.replaceState(null, "", "#ajuda");
+    }
   });
 
   els.alertsBtn?.addEventListener("click", alertsOpen);

@@ -498,6 +498,11 @@ kbd {
   border-color: rgba(251, 113, 133, 0.24);
 }
 
+.status-hidden {
+  color: var(--amber);
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
 .status-error {
   color: var(--red);
   border-color: rgba(251, 113, 133, 0.35);

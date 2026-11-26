@@ -183,6 +183,8 @@ export class RadarTracker {
       state: "loading",
       statusMsg: "Procurando sala atual...",
       detectedBy: "",
+      locationHidden: false,
+      locationHiddenAt: 0,
       gen: 0,
       lastLive: new Set(),
       myRoomStreak: 0,
@@ -347,9 +349,24 @@ export class RadarTracker {
     };
   }
 
+  locationHiddenMessage(track) {
+    return {
+      type: "location_hidden",
+      target: track.profile,
+      nick: track.nick,
+      title: "Localização Indisponível",
+      message:
+        "Este usuário pode ter desativado a opção 'Show Current Room' no perfil do IMVU. Para permitir o rastreamento, ele precisa ativar essa opção nas configurações de privacidade.",
+      helpUrl: "#ajuda",
+      at: now(),
+    };
+  }
+
   sendCurrent(client, track) {
     client.send(this.watchingMessage(track));
-    if (track.room) {
+    if (track.locationHidden) {
+      client.send(this.locationHiddenMessage(track));
+    } else if (track.room) {
       client.send(this.roomMessage(track));
     }
     client.send(this.statusMessage(track));
@@ -365,6 +382,26 @@ export class RadarTracker {
     for (const client of track.watchers) {
       client.send(message);
     }
+  }
+
+  /**
+   * O IMVU nao expoe a sala de terceiros quando o alvo desliga o
+   * "Show Current Room". Nao adianta continuar batendo em friends/catvu:
+   * marca como indisponivel, avisa o frontend e para o polling de sala.
+   * O IMQ continua assinado e pode reverter isso se um evento trouxer sala.
+   */
+  markLocationHidden(track, reason = "sala nao exposta pelo IMVU") {
+    if (track.locationHidden) return;
+    track.locationHidden = true;
+    track.locationHiddenAt = now();
+    track.detectedBy = "hidden";
+    track.state = "hidden";
+    track.statusMsg = "Indisponível";
+    this.log.warn(
+      `[tracker] ${track.nick} (${track.cid}): ${reason}; parando buscas por friends/catvu`
+    );
+    this.broadcast(track, this.locationHiddenMessage(track));
+    this.broadcast(track, this.statusMessage(track, "hidden", track.statusMsg));
   }
 
   // ---------------- sync inicial ----------------
@@ -465,6 +502,13 @@ export class RadarTracker {
     await this.probeTick(track);
     if (!active() || track.room) return;
 
+    // Nenhuma fonte devolveu sala. Se o alvo esta online, o IMVU esta
+    // ocultando a localizacao (Show Current Room = Profile Only/None).
+    if (track.profile?.online !== false) {
+      this.markLocationHidden(track, "current_room ausente e nenhuma sala encontrada");
+      return;
+    }
+
     this.emitStatus(track, "offline", "Sem sala no momento. Monitorando em tempo real...");
     this.broadcast(track, {
       type: "offline",
@@ -536,6 +580,7 @@ export class RadarTracker {
    * bot tem um unico amigo — e esse amigo e o alvo (fallback do Tracker.kt).
    */
   async checkFriendsRoom(track) {
+    if (track.locationHidden) return false;
     if (now() - (track.friendsHintAt || 0) < FRIENDS_HINT_MS) return false;
     track.friendsHintAt = now();
 
@@ -584,6 +629,8 @@ export class RadarTracker {
 
   async syncCurrentRoom(track) {
     if (this.tracks.get(track.cid) !== track) return false;
+    // Localizacao oculta: nao insiste em current_room/friends/catvu.
+    if (track.locationHidden) return false;
     if (track.syncPromise) return track.syncPromise;
 
     track.syncPromise = (async () => {
@@ -652,7 +699,7 @@ export class RadarTracker {
     if (track.probeInFlight) return track.probeInFlight;
     track.probeInFlight = (async () => {
       // Primeiro tenta a relation current_room do IMVU (uma request barata).
-      if (!track.room) {
+      if (!track.room && !track.locationHidden) {
         const relationRoom = await this.api.currentRoom(track.cid, 0).catch(() => "");
         if (this.tracks.get(track.cid) !== track) return;
         if (relationRoom) {
@@ -663,7 +710,7 @@ export class RadarTracker {
 
       // Rechecagem periodica do catvu: se o alvo entrou/esta parado numa sala
       // que o evento do IMQ nao cobriu, o find devolve o roomId exato.
-      if (!track.room && now() - (track.catvuLastTry || 0) > CATVU_RETRY_MS) {
+      if (!track.room && !track.locationHidden && now() - (track.catvuLastTry || 0) > CATVU_RETRY_MS) {
         track.catvuLastTry = now();
         const result = await catvuFind(track.nick, { timeout: 8_000 }).catch(() => null);
         if (this.tracks.get(track.cid) !== track) return;
@@ -770,6 +817,12 @@ export class RadarTracker {
     if (!this.isActive(track, gen)) return;
     const id = String(rid || "");
     if (!/^\d+-\d+$/.test(id)) return;
+
+    if (track.locationHidden) {
+      track.locationHidden = false;
+      track.locationHiddenAt = 0;
+      this.log.info(`[tracker] ${track.nick}: localizacao voltou a ser visivel (${via})`);
+    }
 
     if (track.room?.roomId === id) {
       await this.refreshRoom(track, { notify: true });
@@ -1172,6 +1225,8 @@ export class RadarTracker {
     track.presenceRoomAt = 0;
     track.lastLeftRoom = oldRoom.roomId;
     track.lastLeftAt = now();
+    track.locationHidden = false;
+    track.locationHiddenAt = 0;
     this.releaseRoom(oldRoom.roomId);
     track.room = null;
     track.occupants.clear();

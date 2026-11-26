@@ -241,6 +241,17 @@ O IMQ só manda evento de presença quando o alvo **entra, sai ou troca de sala*
 
 O catvu é rechecado a cada `CATVU_RETRY_MS` apenas enquanto o alvo ainda não foi localizado pela relation, pela lista de amigos, pelas listas oficiais, pelas salas próprias ou pelo probe.
 
+#### Localização oculta (Show Current Room = None)
+
+Se o alvo desativar **Show Current Room**, o IMVU não entrega `current_room` para terceiros e a lista `friends`/catvu também fica vazia. Depois do sync inicial o backend:
+
+1. registra um `log.warn` único (`[tracker] <nick>: current_room ausente...`);
+2. marca o track como `locationHidden` e para de tentar `current_room`, `friends` e catvu a cada ciclo (o probe das filas `chat-<cid>-*` e a assinatura do IMQ continuam ativos);
+3. envia `location_hidden` para o frontend, que troca o card da sala por **Localização Indisponível** com um link para a aba **Ajuda**;
+4. se um evento do IMQ ou o probe trouxer uma sala depois, o estado oculto é limpo automaticamente.
+
+O tutorial da aba Ajuda mostra o caminho em Desktop/Web, Classic e Mobile. Para testar, use uma conta alvo e deixe **Show Current Room = None**; o radar deve exibir o card de aviso em vez de “Fora de sala”. Com **Everywhere** ou **Recommendations Only**, pare e inicie a vigilância de novo.
+
 ### Alertas no navegador / Web Push
 
 O sino no header abre o painel **Alertas**:
