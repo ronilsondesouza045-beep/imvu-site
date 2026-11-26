@@ -9,6 +9,8 @@ const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 const ROOM_META_TTL = 15_000;
 const ROSTER_TTL = 6_000;
 const ROOM_LIST_TTL = 20_000;
+// Lista de candidatas publicas (recent/explore/feature/friends) por 2 min.
+const PUBLIC_ROOMS_TTL = 120_000;
 const USER_TTL = 10 * 60_000;
 const IMAGE_TTL = 10 * 60_000;
 const IMAGE_CACHE_MAX = 250;
@@ -72,6 +74,8 @@ export class ImvuApi {
     this.roomMetaCache = new Map();
     this.rosterCache = new Map();
     this.roomListCache = new Map();
+    this.roomListEntriesCache = new Map();
+    this.publicRoomsCache = { at: 0, rooms: [] };
     this.imageCache = new Map();
     this.catvuCache = new Map();
   }
@@ -484,16 +488,20 @@ export class ImvuApi {
     return people;
   }
 
-  async roomListRooms(listId) {
+  /**
+   * Entradas de uma lista oficial de salas (friends/recent/explore/feature)
+   * com nome, privacidade e occupancy denormalizados pelo IMVU.
+   */
+  async roomListEntries(listId, ttl = ROOM_LIST_TTL) {
     if (!this.cid) return [];
     const key = String(listId || "");
     if (!/^[a-z_]+$/i.test(key)) return [];
-    const cached = this.roomListCache.get(key);
-    if (cached && now() - cached.at < ROOM_LIST_TTL) return cached.rids;
+    const cached = this.roomListEntriesCache.get(key);
+    if (cached && now() - cached.at < ttl) return cached.entries;
 
     const env = await this.getJson(`/room_list/room_list-${this.cid}-${key}/rooms`);
     const den = env?.denormalized;
-    const rids = [];
+    const entries = [];
     if (den) {
       let items = [];
       for (const [nodeKey, node] of Object.entries(den)) {
@@ -501,23 +509,63 @@ export class ImvuApi {
       }
       const seen = new Set();
       for (const item of items) {
-        const rid = roomIdFromUrl(item);
+        const itemNode = den[item] || {};
+        const ref = itemNode?.relations?.ref || item;
+        const rid = roomIdFromUrl(ref);
         if (!rid || seen.has(rid)) continue;
         seen.add(rid);
-        rids.push(rid);
-        const itemNode = den[item] || {};
-        const ref = itemNode?.relations?.ref || "";
-        const data = den[ref]?.data || {};
+        const data = den[ref]?.data || itemNode?.data || {};
         if (data.name) {
           this.roomMetaCache.set(rid, {
             at: now(),
             meta: { ...data, roomId: rid, restricted: false },
           });
         }
+        entries.push({
+          rid,
+          name: String(data.name || ""),
+          privacy: String(data.privacy || ""),
+          occupancy: data.occupancy === null || data.occupancy === undefined ? null : intOr(data.occupancy, 0),
+          capacity: intOr(data.capacity, 0),
+          owner: String(data.owner_avatarname || ""),
+          type: String(data.type || ""),
+          image: normalizeUrl(data.image_url || ""),
+          render: normalizeUrl(data.themed_image_url || data.image_url || ""),
+        });
       }
     }
-    this.roomListCache.set(key, { at: now(), rids });
-    return rids;
+    this.roomListEntriesCache.set(key, { at: now(), entries });
+    return entries;
+  }
+
+  async roomListRooms(listId) {
+    const entries = await this.roomListEntries(listId, ROOM_LIST_TTL);
+    return entries.map((entry) => entry.rid);
+  }
+
+  /**
+   * Candidatas a sala publica: junta recent/explore/feature/friends, remove
+   * duplicatas e privadas, e ordena pelas mais movimentadas. Cache de 2min.
+   */
+  async publicRoomCandidates({ limit = 50, ttl = PUBLIC_ROOMS_TTL } = {}) {
+    if (!this.cid) return [];
+    if (this.publicRoomsCache.at && now() - this.publicRoomsCache.at < ttl) {
+      return this.publicRoomsCache.rooms.slice(0, limit);
+    }
+    const seen = new Map();
+    for (const listId of ["recent", "explore", "feature", "friends"]) {
+      const entries = await this.roomListEntries(listId, PUBLIC_ROOMS_TTL).catch(() => []);
+      for (const entry of entries) {
+        if (!entry?.rid || seen.has(entry.rid)) continue;
+        if (String(entry.privacy || "").toLowerCase() === "private") continue;
+        seen.set(entry.rid, entry);
+      }
+    }
+    const rooms = [...seen.values()].sort(
+      (a, b) => (Number(b.occupancy) || 0) - (Number(a.occupancy) || 0)
+    );
+    this.publicRoomsCache = { at: now(), rooms };
+    return rooms.slice(0, limit);
   }
 
   /**

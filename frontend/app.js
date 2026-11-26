@@ -1199,7 +1199,7 @@
     if (!genericName) return rawName;
     if (type === "MY_ROOM") return "My Room";
     if (isPrivate) return `Sala Privada (ID: ${roomId || "?"})`;
-    return roomId ? `Sala ${roomId}` : "—";
+    return roomId ? `Sala Pública (ID: ${roomId})` : "—";
   }
 
   function renderRoomsGrid() {

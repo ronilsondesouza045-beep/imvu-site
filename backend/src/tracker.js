@@ -26,6 +26,12 @@ const MULTI_PROBE_MS = envInt("MULTI_PROBE_MS", 60_000);
 // Estado "oculto" nao pode ser permanente: a privacidade do alvo pode mudar
 // (Show Current Room) ou a sala pode ficar visivel depois. Recheca a cada 60s.
 const HIDDEN_RETRY_MS = envInt("HIDDEN_RETRY_MS", 60_000);
+// Varredura ativa de salas publicas (recent/explore/feature) para achar o
+// alvo sem depender do current_room.
+const PUBLIC_SCAN_MS = envInt("PUBLIC_SCAN_MS", 120_000);
+const PUBLIC_SCAN_LIMIT = envInt("PUBLIC_SCAN_LIMIT", 50);
+const PUBLIC_SCAN_DEADLINE_MS = envInt("PUBLIC_SCAN_DEADLINE_MS", 25_000);
+const PUBLIC_SCAN_CONCURRENCY = envInt("PUBLIC_SCAN_CONCURRENCY", 5);
 // Leitura da relation current_room a cada 5s: detecta troca de sala rapido.
 const ROOM_REFRESH_MS = envInt("ROOM_REFRESH_MS", 5_000);
 // Roster HTTP e metadados continuam mais espacados para nao estourar rate limit.
@@ -48,7 +54,7 @@ function isGenericRoomName(name, roomId) {
   const value = String(name || "").trim();
   if (!value) return true;
   if (value === String(roomId || "")) return true;
-  if (/^Sala privada \(ID:/i.test(value)) return true;
+  if (/^Sala (privada|p[uú]blica) \(ID:/i.test(value)) return true;
   if (/^Sala \d+-\d+$/.test(value)) return true;
   return false;
 }
@@ -264,6 +270,8 @@ export class RadarTracker {
       lastLeftAt: 0,
       lastRosterRefreshAt: 0,
       friendsHintAt: 0,
+      lastPublicScanAt: 0,
+      publicScanPromise: null,
       roomSetSeq: 0,
       catvu: null,
       catvuWatch: null,
@@ -574,32 +582,11 @@ export class RadarTracker {
     const cid = track.cid;
     const active = () => this.isActive(track, gen);
 
-    // 0) Fonte direta do IMVU: relations.current_room do node do usuario.
-    // Funciona com o alvo parado e nao depende do catvu.
-    this.emitStatus(track, "loading", "Lendo sala atual no IMVU...");
-    let relationRoom = await this.api.currentRoom(cid, 0).catch(() => "");
-    if (!active()) return;
-
-    // A relation pode ficar presa na My Room do alvo enquanto ele esta na
-    // sala de outra pessoa. Se o IMQ ja viu outra sala, ela vence.
-    if (
-      relationRoom === `${cid}-1` &&
-      track.presenceRoom &&
-      track.presenceRoom !== relationRoom
-    ) {
-      relationRoom = track.presenceRoom;
-    }
-
-    if (relationRoom) {
-      await this.setRoom(track, relationRoom, { via: "user_relation", gen });
-      return;
-    }
-
-    // Catvu entra como fallback: e a fonte que devolve a sala ATUAL do alvo
-    // mesmo quando ele esta parado (inclusive sala privada).
+    // Fontes extras rodam em paralelo sem furar a prioridade:
+    // catvu (indice externo) e current_room (fallback).
     track.catvuLastTry = now();
-    // Force no inicio: evita usar cache de uma sala anterior do mesmo nick.
     const catvuPromise = catvuFind(track.nick, { timeout: 10_000, force: true }).catch(() => null);
+    const relationPromise = this.api.currentRoom(cid, 0).catch(() => "");
 
     // 1) Lista de amigos do bot: o IMVU denormaliza a sala atual de cada
     // amigo. Inclui o fallback de sala privada (roster 403) do Tracker.kt.
@@ -607,7 +594,28 @@ export class RadarTracker {
     if (await this.checkFriendsRoom(track)) return;
     if (!active()) return;
 
-    // 2) Catvu find: sala exata, sem depender de evento de movimento.
+    // 2) Varredura ativa das salas publicas mais movimentadas.
+    this.emitStatus(track, "loading", "Varrendo salas publicas...");
+    if (await this.scanPublicRooms(track, { force: true })) return;
+    if (!active()) return;
+
+    // 3) current_room do perfil como fallback (pode estar oculto).
+    this.emitStatus(track, "loading", "Lendo sala atual no IMVU...");
+    let relationRoom = await relationPromise;
+    if (!active()) return;
+    if (
+      relationRoom === `${cid}-1` &&
+      track.presenceRoom &&
+      track.presenceRoom !== relationRoom
+    ) {
+      relationRoom = track.presenceRoom;
+    }
+    if (relationRoom) {
+      await this.setRoom(track, relationRoom, { via: "user_relation", gen });
+      return;
+    }
+
+    // 4) Catvu find: sala exata, sem depender de evento de movimento.
     this.emitStatus(track, "loading", "Consultando indice de salas (catvu)...");
     const catvu = await catvuPromise;
     if (catvu?.rooms?.length) {
@@ -616,7 +624,7 @@ export class RadarTracker {
     }
     if (!active()) return;
 
-    // 3) Listas oficiais: friends / recent / explore.
+    // 5) Listas oficiais: friends / recent / explore.
     this.emitStatus(track, "loading", "Varrendo listas oficiais...");
     const listHits = await this.api.findInLists(cid, ["friends", "recent", "explore"], {
       deadlineMs: now() + LIST_DEADLINE_MS,
@@ -634,7 +642,7 @@ export class RadarTracker {
       return;
     }
 
-    // 4) Salas proprias do alvo com ocupacao > 0.
+    // 6) Salas proprias do alvo com ocupacao > 0.
     this.emitStatus(track, "loading", "Varrendo salas do alvo...");
     const ownHits = await this.api.findInOwnRooms(cid, OWN_ROOM_SCAN, {
       deadlineMs: now() + OWN_DEADLINE_MS,
@@ -650,7 +658,7 @@ export class RadarTracker {
       return;
     }
 
-    // 5) Probe do IMQ: filas chat-<cid>-* vivas.
+    // 7) Probe do IMQ: filas chat-<cid>-* vivas.
     this.emitStatus(track, "loading", "Sondando canais em tempo real...");
     await this.probeTick(track);
     if (!active() || track.room) return;
@@ -780,6 +788,76 @@ export class RadarTracker {
     return false;
   }
 
+  /**
+   * Varredura ativa das salas publicas mais movimentadas (recent/explore/
+   * feature). Confirma pelo roster e adiciona cada sala onde o alvo esta.
+   * Cache da lista: 2 min (ImvuApi.publicRoomCandidates). Por track a
+   * varredura roda no maximo a cada PUBLIC_SCAN_MS para nao estourar rate limit.
+   */
+  async scanPublicRooms(track, { force = false } = {}) {
+    if (this.tracks.get(track.cid) !== track) return false;
+    if (track.locationHidden) return false;
+    if (track.publicScanPromise) return track.publicScanPromise;
+    if (!force && now() - (track.lastPublicScanAt || 0) < PUBLIC_SCAN_MS) return false;
+    track.lastPublicScanAt = now();
+
+    track.publicScanPromise = (async () => {
+      const candidates = await this.api
+        .publicRoomCandidates({ limit: PUBLIC_SCAN_LIMIT })
+        .catch(() => []);
+      if (!candidates.length) return false;
+      const deadline = now() + PUBLIC_SCAN_DEADLINE_MS;
+      let found = false;
+      let index = 0;
+
+      const workers = Array.from(
+        { length: Math.min(PUBLIC_SCAN_CONCURRENCY, candidates.length) },
+        async () => {
+          while (true) {
+            if (this.tracks.get(track.cid) !== track) return;
+            if (now() > deadline) return;
+            const i = index++;
+            if (i >= candidates.length) return;
+            const candidate = candidates[i];
+            const rid = String(candidate?.rid || "");
+            if (!/^\d+-\d+$/.test(rid)) continue;
+            const people = await this.api.roster(rid, 3_000).catch(() => []);
+            if (this.tracks.get(track.cid) !== track) return;
+            if (!people.some((person) => person.cid === track.cid)) continue;
+            found = true;
+            await this.setRoom(track, rid, {
+              seed: people,
+              via: "public_scan",
+              hint: {
+                roomId: rid,
+                name: candidate.name || "",
+                privacy: candidate.privacy || "public",
+                isPrivate: false,
+                occupancy: candidate.occupancy,
+                capacity: candidate.capacity,
+                render: candidate.render || "",
+                cover: candidate.image || "",
+              },
+              gen: track.gen,
+            });
+          }
+        }
+      );
+      await Promise.all(workers);
+      if (found) this.log.info(`[tracker] ${track.nick}: encontrado em sala publica via varredura`);
+      return found;
+    })()
+      .catch((error) => {
+        this.log.warn(`[tracker] varredura publica de ${track.nick} falhou: ${error?.message || error}`);
+        return false;
+      })
+      .finally(() => {
+        track.publicScanPromise = null;
+      });
+
+    return track.publicScanPromise;
+  }
+
   async syncCurrentRoom(track) {
     if (this.tracks.get(track.cid) !== track) return false;
     // Localizacao oculta: nao insiste em current_room/friends/catvu.
@@ -789,7 +867,15 @@ export class RadarTracker {
     track.syncPromise = (async () => {
       if (track.syncBackoffUntil && now() < track.syncBackoffUntil) return false;
 
-      // ttl 0 = sem cache: cada tick le a relation fresca.
+      // 1) Lista de amigos do bot (fonte oficial, ja denormalizada).
+      if (await this.checkFriendsRoom(track)) return true;
+      if (this.tracks.get(track.cid) !== track) return false;
+
+      // 2) Varredura ativa das salas publicas mais movimentadas.
+      if (await this.scanPublicRooms(track)) return true;
+      if (this.tracks.get(track.cid) !== track) return false;
+
+      // 3) current_room do perfil como fallback (pode estar oculto).
       const rid = await this.api.currentRoom(track.cid, 0).catch(() => "");
       if (this.tracks.get(track.cid) !== track) return false;
 
@@ -800,8 +886,7 @@ export class RadarTracker {
           return false;
         }
         track.syncBackoffUntil = 0;
-        // current_room nao existe para terceiros: a lista friends e a fonte.
-        return this.checkFriendsRoom(track);
+        return false;
       }
 
       track.syncBackoffUntil = 0;
@@ -814,10 +899,9 @@ export class RadarTracker {
       }
 
       // My Room na relation costuma ficar "presa" enquanto o alvo esta em
-      // sala de terceiro. Lista de amigos/IMQ vencem essa leitura.
+      // sala de terceiro. A presenca fresca do IMQ vence essa leitura.
       const relationMyRoom = rid === `${track.cid}-1`;
       if (relationMyRoom) {
-        if (await this.checkFriendsRoom(track)) return true;
         const presenceFresh = Boolean(
           track.presenceRoom &&
             track.presenceRoom !== rid &&
@@ -1045,6 +1129,7 @@ export class RadarTracker {
       detectedBy: via,
       lastSeenAt: now(),
       lastRefreshedAt: 0,
+      missedCount: 0,
       catvuSnapshotAt: 0,
       catvuSnapshotLoading: false,
       seq,
@@ -1574,6 +1659,21 @@ export class RadarTracker {
     const needsPrivateFill = live.room.privacy === "private" || live.room.restricted;
     if (needsPrivateFill && (!live.catvuSnapshotAt || now() - live.catvuSnapshotAt > 60_000)) {
       this.loadCatvuSnapshot(track, id).catch(() => {});
+    }
+
+    // Sala publica onde o alvo nao aparece mais em rostes consecutivos:
+    // sem evento deleted do IMQ, remove depois de 2 leituras para nao
+    // manter assinatura de presenca de sala que ele ja deixou.
+    const isPublicRoom = live.room.privacy !== "private" && !live.room.restricted;
+    const targetInRoster = people.some((person) => person.cid === track.cid);
+    if (isPublicRoom && people.length && !targetInRoster) {
+      live.missedCount = (live.missedCount || 0) + 1;
+      if (live.missedCount >= 2) {
+        this.removeRoom(track, id, "not_in_room");
+        return;
+      }
+    } else if (targetInRoster) {
+      live.missedCount = 0;
     }
 
     // Roster vazio pode ser falha transitória (403/timeout) em sala privada.
