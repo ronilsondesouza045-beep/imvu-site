@@ -15,6 +15,89 @@ const LEFT_ACTIONS = new Set(["deleted", "left"]);
 const ROOM_PROP_KEYS = ["room", "room_id", "location", "current_room", "chat_room"];
 const RECONNECT_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 
+/**
+ * Extrai um roomId (`<cid>-<n>`) de um valor cru, URL (`.../room-123-4`)
+ * ou node. Aceita query/hash no final.
+ */
+export function parseRoomId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\d+-\d+$/.test(raw)) return raw;
+  const fromUrl = /room-(\d+-\d+)/i.exec(raw);
+  if (fromUrl) return fromUrl[1];
+  const trailing = /(\d+-\d+)(?:[/?#].*)?$/.exec(raw);
+  return trailing ? trailing[1] : "";
+}
+
+/** Primeira propriedade conhecida do estado que aponta para uma sala. */
+function roomIdFromProps(props) {
+  if (!props) return "";
+  for (const key of ROOM_PROP_KEYS) {
+    const room = parseRoomId(props[key]);
+    if (room) return room;
+  }
+  return "";
+}
+
+/** cid a partir de um valor solto (`123`, `user-123`, `avatar-123`). */
+function cidFromState(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const tagged = /(?:user|avatar|presence)[-/](\d+)/i.exec(raw);
+  if (tagged) return tagged[1];
+  if (/^\d+$/.test(raw)) return raw;
+  return "";
+}
+
+/** Descobre cid do ocupante nas propriedades ou no mount da fila. */
+function cidFromProps(props, extra = {}) {
+  if (props) {
+    const keys = [
+      "cid",
+      "user_id",
+      "userId",
+      "avatar_id",
+      "avatarId",
+      "customer_id",
+      "customerId",
+      "user",
+      "avatar",
+    ];
+    for (const key of keys) {
+      const cid = cidFromState(props[key]);
+      if (cid) return cid;
+    }
+  }
+  return cidFromState(extra.mount) || cidFromState(extra.userId);
+}
+
+/**
+ * Classifica a fila de estado:
+ * - presence-<cid>      -> presenca do usuario (current_room vive aqui)
+ * - presence-<roomId>   -> presenca da sala (ocupantes)
+ * - chat-<roomId>       -> chat da sala (edge:participants)
+ */
+function queueInfo(queue) {
+  const q = String(queue || "").trim();
+  if (!q) return { kind: "", room: "", cid: "" };
+  const roomPresence = /presence-(\d+-\d+)\s*$/.exec(q);
+  if (roomPresence) return { kind: "room_presence", room: roomPresence[1], cid: "" };
+  const userPresence = /presence-(\d+)\s*$/.exec(q);
+  if (userPresence) return { kind: "user_presence", room: "", cid: userPresence[1] };
+  // inv:/user/user-<cid>: o node do usuario tambem pode emitir current_room.
+  const userNode = /user-(\d+)\s*$/.exec(q);
+  if (userNode) return { kind: "user_presence", room: "", cid: userNode[1] };
+  const roomChat = /chat-(\d+-\d+)\s*$/.exec(q);
+  if (roomChat) return { kind: "room_chat", room: roomChat[1], cid: "" };
+  return { kind: "", room: "", cid: "" };
+}
+
+function actionFromProps(props) {
+  const raw = String(props?.action || props?.event || "").trim().toLowerCase();
+  if (["left", "leave", "deleted", "removed", "exit", "exited"].includes(raw)) return "left";
+  return "updated";
+}
+
 export function isLiveAction(action) {
   return LIVE_ACTIONS.has(String(action || ""));
 }
@@ -261,7 +344,12 @@ export class ImqClient {
       for (const queue of this.targetQueues(cid)) all.add(queue);
     }
     for (const room of this.rooms) {
-      if (/^\d+-\d+$/.test(room)) all.add(`inv:/chat/chat-${room}`);
+      if (!/^\d+-\d+$/.test(room)) continue;
+      // Chat da sala: edge:participants entrega joined/left/updated.
+      all.add(`inv:/chat/chat-${room}`);
+      // Presenca da sala: estado dos ocupantes em tempo real, inclusive
+      // em sala privada de terceiro onde o roster HTTP vem 403.
+      all.add(`inv:/presence/presence-${room}`);
     }
     return [...all];
   }
@@ -462,22 +550,48 @@ export class ImqClient {
     }
   }
 
-  processStateProps(queue, props) {
-    const cidMatch = /presence-(\d+)/.exec(queue);
-    const cid = cidMatch ? cidMatch[1] : "";
-    this.emit({ type: "state", cid, queue, props });
-    if (!cid) return;
+  processStateProps(queue, props, extra = {}) {
+    const state = props || {};
+    const info = queueInfo(queue);
+    const propRoom = roomIdFromProps(state);
+    const stateCid = cidFromProps(state, extra);
+    const room = propRoom || info.room;
+    const cid = info.cid || stateCid;
 
-    let room = "";
-    for (const key of ROOM_PROP_KEYS) {
-      const value = String(props[key] || "");
-      if (/^\d+-\d+$/.test(value)) {
-        room = value;
-        break;
+    this.emit({ type: "state", cid, queue, room, props: state });
+
+    if (info.kind === "user_presence") {
+      // Fila presence-<cid>: props.current_room/room = sala atual do alvo.
+      if (propRoom) {
+        this.emit({ type: "presence", action: "updated", room: propRoom, cid: info.cid, source: "presence" });
       }
+      return;
     }
-    if (room) {
-      this.emit({ type: "presence", action: "updated", room, cid, source: "presence" });
+
+    if (info.kind === "room_presence" || info.kind === "room_chat") {
+      // Fila da sala: o mount/user_id das propriedades identifica o ocupante.
+      // Se o estado apontar para OUTRA sala, ela vence a sala da propria fila.
+      let occupant = stateCid;
+      const movedRoom = propRoom && info.room && propRoom !== info.room ? propRoom : "";
+      if (!occupant && movedRoom) {
+        const ownerCid = info.room.split("-")[0];
+        // chat-<cid>-* dos alvos: o dono da fila e o proprio alvo.
+        if (this.targetCids.has(ownerCid)) occupant = ownerCid;
+      }
+      if (occupant && (movedRoom || info.room)) {
+        this.emit({
+          type: "presence",
+          action: actionFromProps(state),
+          room: movedRoom || info.room,
+          cid: occupant,
+          source: info.kind === "room_presence" ? "room_presence" : "room_chat",
+        });
+      }
+      return;
+    }
+
+    if (room && cid) {
+      this.emit({ type: "presence", action: actionFromProps(state), room, cid, source: "state" });
     }
   }
 
@@ -488,7 +602,23 @@ export class ImqClient {
       if (!property?.key) continue;
       props[property.key] = b64d(property.value);
     }
-    this.processStateProps(queue, props);
+    if (message.properties && !Array.isArray(message.properties) && typeof message.properties === "object") {
+      for (const [key, value] of Object.entries(message.properties)) {
+        if (props[key] !== undefined) continue;
+        props[key] = value === null || value === undefined ? "" : String(value);
+      }
+    }
+    // Alguns gateways mandam o delta ja decodificado em vez de properties.
+    if (message.delta && typeof message.delta === "object" && !Array.isArray(message.delta)) {
+      for (const [key, value] of Object.entries(message.delta)) {
+        if (props[key] !== undefined) continue;
+        props[key] = value === null || value === undefined ? "" : String(value);
+      }
+    }
+    this.processStateProps(queue, props, {
+      mount: String(message.mount || ""),
+      userId: String(message.user_id || ""),
+    });
   }
 
   /**
@@ -499,15 +629,29 @@ export class ImqClient {
   handleCreateMount(message) {
     const queue = String(message.queue || "");
     const mount = String(message.mount || "");
+    const info = queueInfo(queue);
+    if (!info.kind) return;
+
     const props = {};
     for (const property of message.properties || []) {
       if (!property?.key) continue;
       props[property.key] = b64d(property.value);
     }
+    if (message.state && typeof message.state === "object" && !Array.isArray(message.state)) {
+      for (const [key, value] of Object.entries(message.state)) {
+        if (props[key] !== undefined) continue;
+        props[key] = value === null || value === undefined ? "" : String(value);
+      }
+    }
     if (!Object.keys(props).length) return;
-    if (!queue.includes("presence-")) return;
+
     this.emit({ type: "mount", queue, mount, props });
-    this.processStateProps(queue, props);
+    if (info.kind === "user_presence" || info.kind === "room_presence") {
+      this.processStateProps(queue, props, {
+        mount,
+        userId: String(message.user_id || ""),
+      });
+    }
   }
 
   handleSendMessage(message) {

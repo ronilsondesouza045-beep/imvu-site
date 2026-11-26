@@ -63,6 +63,7 @@ export class ImvuApi {
     this.displayName = "";
     this.loggedIn = false;
     this.lastError = "";
+    this.lastStatus = 0;
     this.loginPromise = null;
 
     this.userCache = new Map();
@@ -123,8 +124,10 @@ export class ImvuApi {
         signal: AbortSignal.timeout(timeout),
       });
       this.applyCookies(response);
+      this.lastStatus = response.status;
       return { status: response.status, text: await response.text() };
     } catch (error) {
+      this.lastStatus = 0;
       this.lastError = error?.message || String(error);
       return null;
     }
@@ -309,7 +312,7 @@ export class ImvuApi {
   async currentRoom(cid, ttl = 10_000) {
     const node = await this.userNode(cid, ttl);
     const url = String(node?.relations?.current_room || "");
-    const match = /room-(\d+-\d+)\s*$/i.exec(url) || /(\d+-\d+)\s*$/.exec(url);
+    const match = /room-(\d+-\d+)/i.exec(url) || /(\d+-\d+)(?:[/?#].*)?$/.exec(url);
     return match ? match[1] : "";
   }
 
@@ -377,10 +380,13 @@ export class ImvuApi {
     const hintPrivate = Boolean(
       hint?.isPrivate ?? hint?.is_private ?? String(hint?.privacy || "").toLowerCase() === "private"
     );
+    const privateHint =
+      restricted || hintPrivate || String(m.privacy || "").toLowerCase() === "private";
     let name = String(m.name || "") || hintName;
     if (!name) {
-      const suffix = id.split("-").pop();
-      name = restricted ? (suffix === "1" ? "My Room" : `Sala privada ${suffix}`) : id;
+      // Sala privada de terceiro: o room node vem 403 e nao entrega o nome.
+      // Mostra o ID completo para o link e o painel continuarem uteis.
+      name = privateHint ? `Sala privada (ID: ${id})` : id;
     }
 
     // O dono da sala e o primeiro cid do roomId; o node do usuario e publico
@@ -397,9 +403,19 @@ export class ImvuApi {
       }
     }
 
-    const isPrivate = restricted || hintPrivate || String(m.privacy || "").toLowerCase() === "private";
-    const directLink =
-      owner && name ? `imvu://room/${encodeQuery(owner)}/${encodeQuery(name)}` : "";
+    const isPrivate = privateHint;
+    // Sem nome real, o link direto e montado pelo roomId (exigencia do radar
+    // para sala privada de terceiro). Com nome, usa o formato do cliente IMVU.
+    const hasRealName =
+      Boolean(name) &&
+      name !== id &&
+      !/^Sala privada \(ID:/i.test(name) &&
+      !/^Sala \d+-\d+$/.test(name);
+    const directLink = owner && hasRealName
+      ? `imvu://room/${encodeQuery(owner)}/${encodeQuery(name)}`
+      : id
+        ? `imvu://room/${id}`
+        : "";
     const webLink = id ? `https://www.imvu.com/next/chat/room-${id}/` : "";
 
     return {

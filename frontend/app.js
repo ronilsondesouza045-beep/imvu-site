@@ -1103,23 +1103,32 @@
     els.roomEmpty?.classList.add("hidden");
     els.roomContent?.classList.remove("hidden");
 
-    if (els.roomName) els.roomName.textContent = room.name || room.roomId || "—";
-
+    const roomId = String(room.roomId || "").trim();
     const isPrivate = room.privacy === "private" || room.privacyLabel === "Privada";
+    const rawName = String(room.name || "").trim();
+    const genericName = !rawName || rawName === roomId || /^Sala \d+-\d+$/.test(rawName);
+    const roomName =
+      isPrivate && genericName ? `Sala privada (ID: ${roomId})` : rawName || roomId || "—";
+    if (els.roomName) els.roomName.textContent = roomName;
+
     if (els.roomPrivacy) {
       els.roomPrivacy.className = `tag ${isPrivate ? "tag-private" : "tag-public"}`;
       els.roomPrivacy.textContent = isPrivate ? "Privada" : "Pública";
     }
 
-    if (els.roomId) els.roomId.textContent = room.roomId ? `#${room.roomId}` : "—";
+    if (els.roomId) els.roomId.textContent = roomId ? `#${roomId}` : "—";
     if (els.roomOwner) els.roomOwner.textContent = room.owner ? `dono ${room.owner}` : "dono —";
     if (els.roomOccupancy) {
       const capacity = Number(room.capacity) > 0 ? ` · cap. ${room.capacity}` : "";
       els.roomOccupancy.textContent = `${state.occupants.length} na sala${capacity}`;
     }
 
-    const directLink = String(room.directLink || "").trim();
-    const webLink = String(room.webLink || "").trim();
+    // Sala privada sem nome: o backend manda imvu://room/<roomId>; se um
+    // payload antigo vier sem link, o frontend monta pelo ID de qualquer forma.
+    const directLink = String(room.directLink || "").trim() ||
+      (roomId ? `imvu://room/${roomId}` : "");
+    const webLink = String(room.webLink || "").trim() ||
+      (roomId ? `https://www.imvu.com/next/chat/room-${roomId}/` : "");
 
     if (els.roomImvuLink) {
       els.roomImvuLink.href = directLink || webLink || "#";
@@ -1151,7 +1160,7 @@
     }
 
     if (state.target) {
-      document.title = `${state.target.displayName || state.target.username} em ${room.name} — IMVU Radar`;
+      document.title = `${state.target.displayName || state.target.username} em ${roomName} — IMVU Radar`;
     }
   }
 

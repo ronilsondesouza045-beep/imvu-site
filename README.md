@@ -158,7 +158,9 @@ RADIO_SECRET=
 | `CATVU_RETRY_MS` | intervalo de rechecagem do catvu quando o alvo ainda não foi localizado (padrão 20000) |
 | `PROBE_INTERVAL_MS` | intervalo do probe de filas (padrão 15000) |
 | `PROBE_TIMEOUT_MS` | timeout do probe (padrão 12000) |
-| `ROOM_REFRESH_MS` | atualização periódica do roster (padrão 20000) |
+| `ROOM_REFRESH_MS` | leitura de `relations.current_room` para detectar troca de sala (padrão 5000) |
+| `ROSTER_REFRESH_MS` | atualização periódica de metadados/roster da sala atual (padrão 15000) |
+| `PRESENCE_TRUST_MS` | janela em que um evento de sala do IMQ vence uma relation presa na My Room (padrão 600000) |
 
 A conta em `IMVU_USER` precisa existir e conseguir logar na API. Use uma conta dedicada; nunca coloque as credenciais no frontend. A conta do bot (`BOT_*`) deve ser, de preferência, **outra** conta, com permissão para entrar na sala onde o DJ vai tocar e ser **Admin** dela. Para reutilizar a conta do rastreador, veja `BOT_ALLOW_SAME_ACCOUNT` na seção do Music Bot.
 
@@ -216,7 +218,7 @@ Arquivos de referência: `app/src/main/java/br/com/imvuradar/app/core/ImvuApi.kt
 }
 ```
 
-Filas usadas por alvo: `inv:/chat/chat-<cid>-1..800`, `inv:/user/user-<cid>` e `inv:/presence/presence-<cid>`. A sala atual também é assinada como `inv:/chat/chat-<roomId>`.
+Filas usadas por alvo: `inv:/chat/chat-<cid>-1..800`, `inv:/user/user-<cid>` e `inv:/presence/presence-<cid>`. A sala atual é assinada como `inv:/chat/chat-<roomId>` (eventos `edge:participants`) **e** `inv:/presence/presence-<roomId>` (estado dos ocupantes), o que funciona também em sala privada de terceiro.
 
 5. Eventos:
    - `msg_g2c_send_message` com `mount: "edge:participants"` → `message` em base64 com `{action, objects}`; os cids saem de `objects` por `/user-(\d+)`.
@@ -231,10 +233,10 @@ Filas usadas por alvo: `inv:/chat/chat-<cid>-1..800`, `inv:/user/user-<cid>` e `
 O IMQ só manda evento de presença quando o alvo **entra, sai ou troca de sala**. Se ele já estiver parado dentro de uma sala quando o vigia começa, não existe evento para esperar. A leitura principal agora é feita direto no IMVU:
 
 1. `GET /user/user-<cid>` devolve `relations.current_room`, por exemplo `https://api.imvu.com/room/room-66280412-137`. Esse é o `roomId` **atual** do alvo, mesmo parado e mesmo em sala privada.
-2. O backend lê essa relation no início do watch e recheca a cada ~20s (`syncCurrentRoom`), em paralelo ao IMQ. Se o `roomId` mudar, a sala é atualizada; se for privada, a tag vem como privada e o link direto é montado pelo dono do `roomId`.
-3. O IMQ continua sendo a fonte em tempo real de entrada/saída. Também tratamos `msg_g2c_create_mount` e `msg_g2c_state_change` na fila `presence-<cid>`, que podem entregar o estado inicial da sala na assinatura.
+2. O backend lê essa relation no início do watch e recheca a cada **5s** (`syncCurrentRoom`), em paralelo ao IMQ. Se o `roomId` mudar, a sala é atualizada; se for privada, a tag vem como privada e o link direto é montado pelo `roomId` (`imvu://room/<roomId>`) quando o nome não é exposto.
+3. O IMQ continua sendo a fonte em tempo real de entrada/saída. Também tratamos `msg_g2c_create_mount` e `msg_g2c_state_change` nas filas `presence-<cid>` e `presence-<roomId>`, que podem entregar o estado inicial e a troca de sala na assinatura. Um evento do IMQ apontando outra sala vence a relation quando ela fica presa na My Room do alvo.
 4. O catvu continua como fallback opcional (`find` + `watch`) para nome de sala e roster inicial quando o host consegue acessá-lo. Em Render/cloud o catvu pode estourar timeout ou ser bloqueado; por isso ele **não é mais requisito** para achar o alvo.
-5. Se o room node do IMVU vier 403 (sala privada de terceiro), o nome cai para `Sala privada N`; os ocupantes vêm do roster autenticado quando liberado e dos eventos `edge:participants` do IMQ.
+5. Se o room node do IMVU vier 403 (sala privada de terceiro), o nome cai para `Sala privada (ID: <roomId>)` e o link direto vira `imvu://room/<roomId>`; os ocupantes vêm do roster autenticado quando liberado, dos eventos `edge:participants` do IMQ e da fila `presence-<roomId>`.
 
 O catvu é rechecado a cada `CATVU_RETRY_MS` apenas enquanto o alvo ainda não foi localizado pela relation, pelas listas, pelas salas próprias ou pelo probe.
 
