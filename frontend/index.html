@@ -104,38 +104,6 @@
         </p>
       </section>
 
-      <section class="telegram-banner" aria-label="Alertas no Telegram">
-        <div class="telegram-banner-info">
-          <div class="telegram-logo" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path
-                d="M21.94 4.6 18.9 19.2c-.23 1.02-.84 1.27-1.7.79l-4.71-3.47-2.27 2.19c-.25.25-.46.46-.94.46l.33-4.78 8.7-7.86c.38-.34-.08-.53-.59-.19L7.97 12.37 3.32 10.9c-1.01-.32-1.03-1.01.21-1.5L20.62 3c.84-.31 1.52.2 1.32 1.6Z"
-              />
-            </svg>
-          </div>
-          <div class="min-w-0">
-            <h2 class="telegram-banner-title">🤖 Receba alertas no seu Telegram <span>(100% Grátis)</span></h2>
-            <p class="telegram-banner-text">
-              Vigie qualquer nick e receba aviso na hora em que ele trocar de sala — direto no seu celular.
-            </p>
-          </div>
-        </div>
-        <a
-          class="telegram-banner-btn"
-          href="https://t.me/RadarIMVU_bot"
-          target="_blank"
-          rel="noopener"
-          aria-label="Abrir o bot no Telegram"
-        >
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path
-              d="M21.94 4.6 18.9 19.2c-.23 1.02-.84 1.27-1.7.79l-4.71-3.47-2.27 2.19c-.25.25-.46.46-.94.46l.33-4.78 8.7-7.86c.38-.34-.08-.53-.59-.19L7.97 12.37 3.32 10.9c-1.01-.32-1.03-1.01.21-1.5L20.62 3c.84-.31 1.52.2 1.32 1.6Z"
-            />
-          </svg>
-          Abrir Bot no Telegram
-        </a>
-      </section>
-
       <section id="mainCards" class="grid gap-4 lg:grid-cols-[1fr_1.35fr]">
         <article class="card p-5">
           <div class="flex items-start justify-between gap-3">
@@ -177,7 +145,10 @@
           <div id="roomBackdrop" class="room-backdrop" aria-hidden="true"></div>
           <div class="relative">
             <div class="flex items-center justify-between gap-3">
-              <div class="eyebrow-sm">Sala atual</div>
+              <div class="flex items-center gap-2">
+                <div class="eyebrow-sm">Salas ativas</div>
+                <span id="roomCountBadge" class="count-pill hidden">0</span>
+              </div>
               <div id="roomStatus" class="room-status status-idle">
                 <span class="dot"></span>
                 <span id="roomStatusText">Aguardando</span>
@@ -223,28 +194,7 @@
             </div>
 
             <div id="roomContent" class="hidden pt-4">
-              <div class="flex flex-wrap items-center gap-2">
-                <h2 id="roomName" class="font-display text-2xl font-semibold leading-tight">—</h2>
-                <span id="roomPrivacy" class="tag tag-public">Pública</span>
-              </div>
-              <div class="mono mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
-                <span id="roomId">—</span>
-                <span aria-hidden="true">·</span>
-                <span id="roomOwner">—</span>
-                <span aria-hidden="true">·</span>
-                <span id="roomOccupancy">—</span>
-              </div>
-
-              <div id="roomActions" class="mt-4 flex flex-wrap gap-2">
-                <a id="roomImvuLink" class="btn-primary" href="#" rel="noopener">Abrir no IMVU</a>
-                <a id="roomWebLink" class="btn-ghost" href="#" target="_blank" rel="noopener">Abrir na web</a>
-                <button id="copyRoomBtn" class="btn-ghost" type="button">Copiar link</button>
-              </div>
-
-              <div id="roomDirectBox" class="mt-4 rounded-xl border border-white/5 bg-black/20 p-3">
-                <div class="text-[10px] uppercase tracking-[0.18em] text-slate-500">Link direto</div>
-                <div id="roomDirect" class="mono mt-1 break-all text-xs text-violet-300">—</div>
-              </div>
+              <div id="roomsList" class="rooms-list" aria-live="polite"></div>
             </div>
           </div>
         </article>

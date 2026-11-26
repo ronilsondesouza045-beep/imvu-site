@@ -601,6 +601,153 @@ kbd {
   font-weight: 700;
 }
 
+/* ---------------- multi-room ---------------- */
+
+.tag-myroom {
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fcd34d;
+}
+
+.rooms-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.room-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 16px;
+  background: rgba(8, 10, 18, 0.62);
+  animation: fade-up 0.28s ease both;
+}
+
+.room-card.is-primary {
+  border-color: rgba(167, 139, 250, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(196, 181, 253, 0.07);
+}
+
+.room-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.room-card-name {
+  display: -webkit-box;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #e6ebf7;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.room-card-meta {
+  color: #74809a;
+  font-size: 10.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.room-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.room-card-btn {
+  flex: 1 1 auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.room-card-link {
+  overflow: hidden;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  color: #8b7fd6;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-roster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.room-roster-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 7px 3px 3px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #9aa6be;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.room-roster-chip.is-target {
+  border-color: rgba(167, 139, 250, 0.45);
+  background: rgba(139, 92, 246, 0.14);
+  color: #ddd6fe;
+}
+
+.room-roster-avatar {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: rgba(139, 92, 246, 0.2);
+}
+
+.room-roster-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.room-roster-avatar .avatar-initials {
+  font-size: 8px;
+}
+
+.room-roster-empty {
+  color: #566078;
+  font-size: 10px;
+}
+
+.room-roster-more {
+  color: #8b95ab;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 /* ---------------- ocupantes ---------------- */
 
 .occupants-grid {
@@ -1340,46 +1487,43 @@ kbd {
     padding-top: 6px !important;
   }
 
-  #roomName {
-    font-size: 14px !important;
-    line-height: 1.1;
+  .rooms-list {
+    gap: 7px;
   }
 
-  #roomPrivacy {
-    padding: 2px 5px;
-    font-size: 6.5px;
+  .room-card {
+    gap: 6px;
+    padding: 9px;
+    border-radius: 12px;
   }
 
-  #roomId,
-  #roomOwner,
-  #roomOccupancy {
-    font-size: 7.5px !important;
+  .room-card-name {
+    font-size: 12.5px;
   }
 
-  #roomActions {
-    gap: 4px !important;
-    margin-top: 7px !important;
-  }
-
-  #roomActions .btn-primary,
-  #roomActions .btn-ghost {
-    padding: 6px 7px;
-    border-radius: 7px;
+  .room-card-meta {
     font-size: 8px;
   }
 
-  #roomDirectBox {
-    margin-top: 7px !important;
-    padding: 6px !important;
+  .room-card-btn {
+    padding: 6px 7px;
+    border-radius: 7px;
+    font-size: 8.5px;
   }
 
-  #roomDirectBox > div:first-child {
-    font-size: 7px;
+  .room-card-link {
+    padding: 4px 6px;
+    font-size: 7.5px;
   }
 
-  #roomDirect {
-    font-size: 7.5px !important;
-    line-height: 1.35;
+  .room-roster-chip {
+    padding: 2px 5px 2px 2px;
+    font-size: 8px;
+  }
+
+  .room-roster-avatar {
+    width: 14px;
+    height: 14px;
   }
 
   .room-status {
@@ -1978,102 +2122,4 @@ kbd {
   }
 }
 
-/* ---------- Banner Telegram ---------- */
-.telegram-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 16px;
-  margin-bottom: 16px;
-  padding: 18px 20px;
-  border-radius: 16px;
-  border: 1px solid rgba(34, 158, 217, 0.35);
-  background:
-    radial-gradient(120% 160% at 0% 0%, rgba(34, 158, 217, 0.22), transparent 55%),
-    linear-gradient(135deg, rgba(34, 158, 217, 0.14), rgba(13, 13, 22, 0.78));
-  box-shadow: 0 18px 40px -22px rgba(34, 158, 217, 0.55);
-}
 
-.telegram-banner-info {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-
-.telegram-logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #2aabee, #229ed9);
-  color: #fff;
-  box-shadow: 0 10px 24px -10px rgba(42, 171, 238, 0.8);
-}
-
-.telegram-logo svg {
-  width: 22px;
-  height: 22px;
-}
-
-.telegram-banner-title {
-  margin: 0;
-  font-family: "Space Grotesk", Inter, ui-sans-serif, system-ui, sans-serif;
-  font-size: 15px;
-  font-weight: 700;
-  color: #eaf6ff;
-}
-
-.telegram-banner-title span {
-  color: #7fd0f8;
-}
-
-.telegram-banner-text {
-  margin: 3px 0 0;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: #9db6c9;
-}
-
-.telegram-banner-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  padding: 10px 18px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #2aabee, #1d8fce);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: 0 12px 26px -12px rgba(42, 171, 238, 0.9);
-}
-
-.telegram-banner-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 30px -12px rgba(42, 171, 238, 1);
-}
-
-.telegram-banner-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-@media (max-width: 640px) {
-  .telegram-banner {
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 16px;
-  }
-
-  .telegram-banner-btn {
-    width: 100%;
-    justify-content: center;
-  }
-}

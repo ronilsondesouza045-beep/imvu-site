@@ -424,6 +424,7 @@ export class ImvuApi {
       name,
       privacy: isPrivate ? "private" : String(m.privacy || "public"),
       privacyLabel: isPrivate ? "Privada" : "Pública",
+      room_type: String(m.room_type || m.roomType || m.type || ""),
       restricted,
       owner,
       occupancy: intOr(m.occupancy, 0),

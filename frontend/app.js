@@ -29,6 +29,7 @@
     watching: false,
     target: null,
     room: null,
+    rooms: [],
     occupants: [],
     locationHidden: false,
     locationHiddenTitle: "",
@@ -86,15 +87,8 @@
     roomHidden: $("#roomHidden"),
     roomHiddenText: $("#roomHiddenText"),
     roomContent: $("#roomContent"),
-    roomName: $("#roomName"),
-    roomPrivacy: $("#roomPrivacy"),
-    roomId: $("#roomId"),
-    roomOwner: $("#roomOwner"),
-    roomOccupancy: $("#roomOccupancy"),
-    roomImvuLink: $("#roomImvuLink"),
-    roomWebLink: $("#roomWebLink"),
-    copyRoomBtn: $("#copyRoomBtn"),
-    roomDirect: $("#roomDirect"),
+    roomsList: $("#roomsList"),
+    roomCountBadge: $("#roomCountBadge"),
     occupantCount: $("#occupantCount"),
     occupantHint: $("#occupantHint"),
     occupants: $("#occupants"),
@@ -810,23 +804,30 @@
         state.locationHiddenTitle = "";
         state.locationHiddenText = "";
         const previousRoomId = state.room?.roomId || "";
-        const nextRoomId = message.room?.roomId || "";
-        if (previousRoomId && nextRoomId && previousRoomId !== nextRoomId) {
+        const rooms = normalizeRooms(message);
+        const primaryId = String(message.room?.roomId || rooms[0]?.roomId || "");
+        const primary = rooms.find((room) => room.roomId === primaryId) || rooms[0] || null;
+        if (previousRoomId && primary?.roomId && previousRoomId !== primary.roomId) {
           toast("Mudou de sala", {
             kind: "info",
-            detail: `${state.room?.name || previousRoomId} → ${message.room?.name || nextRoomId}`,
+            detail: `${roomDisplayName(state.room)} → ${roomDisplayName(primary)}`,
           });
         }
-        state.room = message.room || null;
-        state.occupants = Array.isArray(message.occupants) ? message.occupants : [];
+        state.rooms = rooms;
+        state.room = primary;
+        state.occupants = primary?.occupants?.length
+          ? primary.occupants
+          : Array.isArray(message.occupants)
+            ? message.occupants
+            : [];
         if (message.target) state.target = message.target;
         renderTarget();
         renderRoom();
         renderOccupants();
-        setStatus("online", message.room ? `Na sala ${message.room.name}` : "Na sala");
-        if (message.room) {
-          const roomLabel = `${message.room.name || message.room.roomId}${
-            message.room.privacy === "private" ? " (privada)" : ""
+        setStatus("online", primary ? `Na sala ${roomDisplayName(primary)}` : "Na sala");
+        if (primary) {
+          const roomLabel = `${roomDisplayName(primary)}${
+            roomTypeOf(primary) === "PRIVATE" ? " (privada)" : ""
           }`;
           alertsLogAdd(`Sala: ${roomLabel}`);
           maybeLocalNotify(
@@ -842,6 +843,7 @@
         state.locationHiddenTitle = message.title || "Localização Indisponível";
         state.locationHiddenText = message.message || "";
         state.room = null;
+        state.rooms = [];
         state.occupants = [];
         if (message.target) state.target = message.target;
         renderTarget();
@@ -855,6 +857,7 @@
         state.locationHiddenTitle = "";
         state.locationHiddenText = "";
         state.room = null;
+        state.rooms = [];
         state.occupants = [];
         renderRoom();
         renderOccupants();
@@ -865,12 +868,16 @@
         state.locationHidden = false;
         state.locationHiddenTitle = "";
         state.locationHiddenText = "";
-        const roomName = message.room?.name || message.room?.roomId || "sala";
-        state.room = null;
-        state.occupants = [];
+        const leftRoomId = String(message.room?.roomId || "");
+        const roomName = roomDisplayName(message.room);
+        if (leftRoomId) {
+          state.rooms = state.rooms.filter((room) => room.roomId !== leftRoomId);
+        }
+        state.room = state.rooms[0] || null;
+        state.occupants = state.room?.occupants || [];
         renderRoom();
         renderOccupants();
-        setStatus("offline", "Fora de sala — monitorando...");
+        if (!state.rooms.length) setStatus("offline", "Fora de sala — monitorando...");
         toast(`${message.nick || state.target?.username || "O alvo"} saiu da sala`, {
           kind: "warn",
           detail: roomName,
@@ -883,8 +890,20 @@
       case "occupant_join": {
         const person = message.occupant;
         if (person?.cid) {
-          const exists = state.occupants.some((item) => item.cid === person.cid);
-          if (!exists) state.occupants.push(person);
+          const roomId = String(message.room || state.room?.roomId || "");
+          const room =
+            state.rooms.find((item) => item.roomId === roomId) ||
+            (state.room?.roomId === roomId ? state.room : null);
+          if (room) {
+            if (!Array.isArray(room.occupants)) room.occupants = [];
+            if (!room.occupants.some((item) => item.cid === person.cid)) {
+              room.occupants.push(person);
+              room.total = room.occupants.length;
+              room.occupancy = Math.max(Number(room.occupancy) || 0, room.occupants.length);
+            }
+            if (state.room?.roomId === roomId) state.occupants = room.occupants;
+          }
+          renderRoom();
           renderOccupants();
         }
         const name = person?.displayName || person?.username || message.nick || "Alguém";
@@ -900,7 +919,16 @@
       case "occupant_leave": {
         const cid = message.cid || message.occupant?.cid;
         if (cid) {
-          state.occupants = state.occupants.filter((item) => item.cid !== cid);
+          const roomId = String(message.room || state.room?.roomId || "");
+          const room =
+            state.rooms.find((item) => item.roomId === roomId) ||
+            (state.room?.roomId === roomId ? state.room : null);
+          if (room && Array.isArray(room.occupants)) {
+            room.occupants = room.occupants.filter((item) => item.cid !== cid);
+            room.total = room.occupants.length;
+            if (state.room?.roomId === roomId) state.occupants = room.occupants;
+          }
+          renderRoom();
           renderOccupants();
         }
         const name =
@@ -1118,9 +1146,176 @@
     }
   }
 
+  const ROOM_TYPE_META = {
+    PUBLIC: { label: "Pública", className: "tag-public" },
+    PRIVATE: { label: "Privada", className: "tag-private" },
+    MY_ROOM: { label: "My Room", className: "tag-myroom" },
+    AP: { label: "AP", className: "tag-ap" },
+  };
+
+  function normalizeRooms(message) {
+    const list = Array.isArray(message.rooms) ? message.rooms : [];
+    if (list.length) {
+      return list.map((room) => ({
+        ...room,
+        occupants: Array.isArray(room.occupants) ? room.occupants : [],
+      }));
+    }
+    if (message.room) {
+      return [
+        {
+          ...message.room,
+          occupants: Array.isArray(message.occupants) ? message.occupants : [],
+        },
+      ];
+    }
+    return [];
+  }
+
+  function roomTypeOf(room) {
+    const type = String(room?.type || "").toUpperCase();
+    if (ROOM_TYPE_META[type]) return type;
+    const roomId = String(room?.roomId || "");
+    if (roomId.endsWith("-1")) return "MY_ROOM";
+    if (room?.privacy === "private" || room?.privacyLabel === "Privada") return "PRIVATE";
+    return "PUBLIC";
+  }
+
+  function roomMetaOf(room) {
+    return ROOM_TYPE_META[roomTypeOf(room)] || ROOM_TYPE_META.PUBLIC;
+  }
+
+  function roomDisplayName(room) {
+    if (!room) return "—";
+    const roomId = String(room.roomId || "").trim();
+    const rawName = String(room.name || "").trim();
+    const type = roomTypeOf(room);
+    const isPrivate = type === "PRIVATE" || room.privacy === "private" || room.privacyLabel === "Privada";
+    const genericName =
+      !rawName ||
+      rawName === roomId ||
+      /^Sala \d+-\d+$/.test(rawName) ||
+      /^Sala privada \(ID:/i.test(rawName);
+    if (!genericName) return rawName;
+    if (type === "MY_ROOM") return "My Room";
+    if (isPrivate) return `Sala Privada (ID: ${roomId || "?"})`;
+    return roomId ? `Sala ${roomId}` : "—";
+  }
+
+  function renderRoomsGrid() {
+    if (!els.roomsList) return;
+    els.roomsList.replaceChildren();
+    const rooms = state.rooms || [];
+    const targetCid = state.target?.cid;
+
+    for (const room of rooms) {
+      const type = roomTypeOf(room);
+      const meta = roomMetaOf(room);
+      const roomId = String(room.roomId || "").trim();
+      const isPrimary = state.room?.roomId === roomId;
+      const directLink =
+        String(room.directLink || "").trim() || (roomId ? `imvu://room/${roomId}` : "");
+      const webLink =
+        String(room.webLink || "").trim() ||
+        (roomId ? `https://www.imvu.com/next/chat/room-${roomId}/` : "");
+
+      const card = document.createElement("div");
+      card.className = `room-card room-card-${type.toLowerCase()}${isPrimary ? " is-primary" : ""}`;
+      card.dataset.roomId = roomId;
+
+      const head = document.createElement("div");
+      head.className = "room-card-head";
+      const title = document.createElement("h3");
+      title.className = "font-display room-card-name";
+      title.textContent = roomDisplayName(room);
+      head.append(title, makeBadge(meta.label, meta.className));
+
+      const info = document.createElement("div");
+      info.className = "mono room-card-meta";
+      const bits = [];
+      if (roomId) bits.push(`#${roomId}`);
+      if (room.owner) bits.push(`dono ${room.owner}`);
+      const people = Array.isArray(room.occupants) ? room.occupants : [];
+      const occupancy = Math.max(Number(room.occupancy) || 0, people.length);
+      const capacity = Number(room.capacity) > 0 ? ` / cap. ${room.capacity}` : "";
+      bits.push(`${occupancy}${capacity} na sala`);
+      info.textContent = bits.join(" · ");
+
+      const actions = document.createElement("div");
+      actions.className = "room-card-actions";
+      if (directLink) {
+        const open = document.createElement("a");
+        open.className = "btn-primary room-card-btn";
+        open.href = directLink;
+        open.textContent = "Abrir no IMVU";
+        actions.appendChild(open);
+      }
+      if (webLink) {
+        const web = document.createElement("a");
+        web.className = "btn-ghost room-card-btn";
+        web.href = webLink;
+        web.target = "_blank";
+        web.rel = "noopener";
+        web.textContent = "Abrir na web";
+        actions.appendChild(web);
+      }
+      const link = directLink || webLink;
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "btn-ghost room-card-btn room-copy-btn";
+      copy.dataset.link = link;
+      copy.disabled = !link;
+      copy.textContent = "Copiar link";
+      actions.appendChild(copy);
+
+      const direct = document.createElement("div");
+      direct.className = "room-card-link mono";
+      direct.textContent = link ? readableLink(link) : "—";
+
+      const roster = document.createElement("div");
+      roster.className = "room-roster";
+      const sorted = [...people]
+        .sort((a, b) => {
+          if (a.cid === targetCid) return -1;
+          if (b.cid === targetCid) return 1;
+          return String(a.displayName || a.username || "").localeCompare(
+            String(b.displayName || b.username || ""),
+            "pt-BR"
+          );
+        })
+        .slice(0, 8);
+      for (const person of sorted) {
+        const chip = document.createElement("span");
+        chip.className = `room-roster-chip${person.cid === targetCid ? " is-target" : ""}`;
+        chip.title = person.displayName || person.username || "";
+        chip.appendChild(createAvatar(person, "room-roster-avatar"));
+        const nick = document.createElement("span");
+        nick.textContent = person.displayName || person.username || person.cid || "?";
+        chip.appendChild(nick);
+        roster.appendChild(chip);
+      }
+      if (!sorted.length) {
+        const empty = document.createElement("span");
+        empty.className = "room-roster-empty";
+        empty.textContent = "ninguém visível";
+        roster.appendChild(empty);
+      } else if (people.length > sorted.length) {
+        const more = document.createElement("span");
+        more.className = "room-roster-more";
+        more.textContent = `+${people.length - sorted.length}`;
+        roster.appendChild(more);
+      }
+
+      card.append(head, info, actions, direct, roster);
+      els.roomsList.appendChild(card);
+    }
+  }
+
   function renderRoom() {
-    const room = state.room;
-    if (!room) {
+    const rooms = state.rooms || [];
+    const room = state.room || rooms[0] || null;
+
+    if (!rooms.length) {
       if (state.locationHidden) {
         els.roomEmpty?.classList.add("hidden");
         els.roomContent?.classList.add("hidden");
@@ -1132,6 +1327,7 @@
           els.roomBackdrop.style.backgroundImage = "";
           els.roomBackdrop.style.opacity = "0";
         }
+        els.roomCountBadge?.classList.add("hidden");
         return;
       }
 
@@ -1142,6 +1338,8 @@
         els.roomBackdrop.style.backgroundImage = "";
         els.roomBackdrop.style.opacity = "0";
       }
+      els.roomCountBadge?.classList.add("hidden");
+      if (els.roomsList) els.roomsList.replaceChildren();
       renderRoomsState();
       return;
     }
@@ -1149,53 +1347,14 @@
     els.roomHidden?.classList.add("hidden");
     els.roomEmpty?.classList.add("hidden");
     els.roomContent?.classList.remove("hidden");
+    renderRoomsGrid();
 
-    const roomId = String(room.roomId || "").trim();
-    const isPrivate = room.privacy === "private" || room.privacyLabel === "Privada";
-    const rawName = String(room.name || "").trim();
-    const genericName = !rawName || rawName === roomId || /^Sala \d+-\d+$/.test(rawName);
-    const roomName =
-      isPrivate && genericName ? `Sala privada (ID: ${roomId})` : rawName || roomId || "—";
-    if (els.roomName) els.roomName.textContent = roomName;
-
-    if (els.roomPrivacy) {
-      els.roomPrivacy.className = `tag ${isPrivate ? "tag-private" : "tag-public"}`;
-      els.roomPrivacy.textContent = isPrivate ? "Privada" : "Pública";
+    if (els.roomCountBadge) {
+      els.roomCountBadge.textContent = String(rooms.length);
+      els.roomCountBadge.classList.toggle("hidden", rooms.length < 2);
     }
 
-    if (els.roomId) els.roomId.textContent = roomId ? `#${roomId}` : "—";
-    if (els.roomOwner) els.roomOwner.textContent = room.owner ? `dono ${room.owner}` : "dono —";
-    if (els.roomOccupancy) {
-      const capacity = Number(room.capacity) > 0 ? ` · cap. ${room.capacity}` : "";
-      els.roomOccupancy.textContent = `${state.occupants.length} na sala${capacity}`;
-    }
-
-    // Sala privada sem nome: o backend manda imvu://room/<roomId>; se um
-    // payload antigo vier sem link, o frontend monta pelo ID de qualquer forma.
-    const directLink = String(room.directLink || "").trim() ||
-      (roomId ? `imvu://room/${roomId}` : "");
-    const webLink = String(room.webLink || "").trim() ||
-      (roomId ? `https://www.imvu.com/next/chat/room-${roomId}/` : "");
-
-    if (els.roomImvuLink) {
-      els.roomImvuLink.href = directLink || webLink || "#";
-      const disabled = !directLink && !webLink;
-      els.roomImvuLink.setAttribute("aria-disabled", disabled ? "true" : "false");
-      els.roomImvuLink.classList.toggle("hidden", disabled);
-    }
-    if (els.roomWebLink) {
-      els.roomWebLink.href = webLink || "#";
-      els.roomWebLink.classList.toggle("hidden", !webLink);
-    }
-    if (els.roomDirect) {
-      els.roomDirect.textContent = directLink ? readableLink(directLink) : webLink || "—";
-    }
-    if (els.copyRoomBtn) {
-      els.copyRoomBtn.dataset.link = directLink || webLink || "";
-      els.copyRoomBtn.disabled = !(directLink || webLink);
-    }
-
-    const backdrop = proxiedImage(room.cover || room.render || "");
+    const backdrop = proxiedImage(room?.cover || room?.render || "");
     if (els.roomBackdrop) {
       if (backdrop) {
         els.roomBackdrop.style.backgroundImage = `url(${JSON.stringify(backdrop)})`;
@@ -1207,7 +1366,11 @@
     }
 
     if (state.target) {
-      document.title = `${state.target.displayName || state.target.username} em ${roomName} — IMVU Radar`;
+      const targetName = state.target.displayName || state.target.username || "Nick";
+      document.title =
+        rooms.length > 1
+          ? `${targetName} em ${rooms.length} salas — IMVU Radar`
+          : `${targetName} em ${roomDisplayName(room)} — IMVU Radar`;
     }
   }
 
@@ -1367,6 +1530,7 @@
   function resetToIdle() {
     state.target = null;
     state.room = null;
+    state.rooms = [];
     state.occupants = [];
     state.locationHidden = false;
     state.locationHiddenTitle = "";
@@ -1393,6 +1557,7 @@
   function resetForWatch(nick) {
     state.target = null;
     state.room = null;
+    state.rooms = [];
     state.occupants = [];
     state.locationHidden = false;
     state.locationHiddenTitle = "";
@@ -1456,8 +1621,10 @@
     });
   });
 
-  els.copyRoomBtn?.addEventListener("click", () => {
-    copyText(els.copyRoomBtn.dataset.link || "", "Link copiado");
+  els.roomsList?.addEventListener("click", (event) => {
+    const button = event.target.closest(".room-copy-btn");
+    if (!button) return;
+    copyText(button.dataset.link || "", "Link copiado");
   });
 
   els.alertsBtn?.addEventListener("click", alertsOpen);

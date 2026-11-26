@@ -20,6 +20,9 @@ const CATVU_RETRY_MS = envInt("CATVU_RETRY_MS", 20_000);
 const TARGET_ROOM_SCAN = envInt("TARGET_ROOM_SCAN", 800);
 const PROBE_INTERVAL_MS = envInt("PROBE_INTERVAL_MS", 15_000);
 const PROBE_TIMEOUT_MS = envInt("PROBE_TIMEOUT_MS", 12_000);
+// Com salas ativas, refaz a varredura das filas chat-<cid>-* para descobrir
+// salas adicionais (multi-room). Sem sala, o probe continua a cada 15s.
+const MULTI_PROBE_MS = envInt("MULTI_PROBE_MS", 60_000);
 // Leitura da relation current_room a cada 5s: detecta troca de sala rapido.
 const ROOM_REFRESH_MS = envInt("ROOM_REFRESH_MS", 5_000);
 // Roster HTTP e metadados continuam mais espacados para nao estourar rate limit.
@@ -45,6 +48,56 @@ function isGenericRoomName(name, roomId) {
   if (/^Sala privada \(ID:/i.test(value)) return true;
   if (/^Sala \d+-\d+$/.test(value)) return true;
   return false;
+}
+
+export const ROOM_TYPE = Object.freeze({
+  PUBLIC: "PUBLIC",
+  PRIVATE: "PRIVATE",
+  MY_ROOM: "MY_ROOM",
+  AP: "AP",
+});
+
+export const ROOM_TYPE_LABEL = Object.freeze({
+  PUBLIC: "Pública",
+  PRIVATE: "Privada",
+  MY_ROOM: "My Room",
+  AP: "AP",
+});
+
+/**
+ * Classifica o tipo da sala antes de enviar para o frontend.
+ * Ordem (spec): My Room -> AP -> privacy.
+ *
+ * 1. room_id terminando em "-1"  => MY_ROOM
+ * 2. room_id igual ao cid do alvo => AP (Avatar Page)
+ * 3. privacy_type public          => PUBLIC
+ * 4. qualquer outra coisa         => PRIVATE
+ *
+ * `meta` permite reconhecer APs que a API marca explicitamente como
+ * room_type "ap"/"avatar_page".
+ */
+export function classifyRoomType(cid, roomId, privacy, meta = null) {
+  const rid = String(roomId || "");
+  const targetCid = String(cid || "");
+  const normalizedPrivacy = String(privacy || "").toLowerCase();
+
+  if (rid.endsWith("-1")) return ROOM_TYPE.MY_ROOM;
+  if (targetCid && rid === targetCid) return ROOM_TYPE.AP;
+
+  const hintType = String(meta?.room_type || meta?.roomType || meta?.type || "").toLowerCase();
+  if (hintType === "ap" || hintType === "avatar_page" || hintType === "avatar-page") {
+    return ROOM_TYPE.AP;
+  }
+
+  return normalizedPrivacy === "public" ? ROOM_TYPE.PUBLIC : ROOM_TYPE.PRIVATE;
+}
+
+/** Nome exibivel: nome real, ou null para o frontend montar o fallback. */
+function displayRoomName(name, roomId, { ownMyRoom = false } = {}) {
+  const value = String(name || "").trim();
+  if (value && !isGenericRoomName(value, roomId)) return value;
+  if (ownMyRoom) return "My Room";
+  return null;
 }
 
 function occupantFromPerson(person) {
@@ -180,6 +233,10 @@ export class RadarTracker {
       nick: profile.username,
       watchers: new Set(),
       alerts: new Map(),
+      // Multi-room: cada sala ativa tem seu proprio card/roster.
+      // `room`/`occupants` continuam apontando para a sala primaria
+      // (a mais recente) por compatibilidade com alertas e push.
+      rooms: new Map(),
       room: null,
       occupants: new Map(),
       state: "loading",
@@ -191,10 +248,9 @@ export class RadarTracker {
       lastLive: new Set(),
       myRoomStreak: 0,
       probeInFlight: null,
-      roomLoadTimer: null,
-      pendingRoom: "",
-      refreshTimer: null,
-      refreshNotify: false,
+      pendingRoomLoads: new Map(),
+      refreshTimers: new Map(),
+      lastProbeAt: 0,
       probeTimer: null,
       refreshLoopTimer: null,
       syncPromise: null,
@@ -222,7 +278,10 @@ export class RadarTracker {
     if (!track.probeTimer) {
       track.probeTimer = setInterval(() => {
         if (this.tracks.get(track.cid) !== track) return;
-        if (track.room) return;
+        // Sem sala a sondagem roda rapido (15s). Com salas, varre as filas
+        // chat-<cid>-* de tempo em tempos para descobrir salas adicionais.
+        if (track.rooms.size && now() - (track.lastProbeAt || 0) < MULTI_PROBE_MS) return;
+        track.lastProbeAt = now();
         this.probeTick(track).catch((error) => {
           this.log.warn(`[tracker] probe(${track.cid}) falhou: ${error?.message || error}`);
         });
@@ -233,11 +292,21 @@ export class RadarTracker {
         if (this.tracks.get(track.cid) !== track) return;
         // current_room: barato e a cada tick (deteccao de troca de sala).
         this.syncCurrentRoom(track).catch(() => {});
-        if (!track.room) return;
+        if (!track.rooms.size) return;
         // Roster/metadados: menos frequente para respeitar o rate limit.
+        // Em multi-room atualiza UMA sala por tick (a mais antiga) para nao
+        // estourar o rate limit do IMVU; o IMQ mantem os rosters em tempo real.
         if (now() - (track.lastRosterRefreshAt || 0) < ROSTER_REFRESH_MS) return;
         track.lastRosterRefreshAt = now();
-        this.refreshRoom(track, { notify: false }).catch(() => {});
+        let oldest = null;
+        for (const [rid, entry] of track.rooms) {
+          if (!oldest || (entry.lastRefreshedAt || 0) < (oldest.entry.lastRefreshedAt || 0)) {
+            oldest = { rid, entry };
+          }
+        }
+        if (oldest) {
+          this.refreshRoomById(track, oldest.rid, { notify: false }).catch(() => {});
+        }
       }, ROOM_REFRESH_MS);
     }
   }
@@ -245,12 +314,16 @@ export class RadarTracker {
   clearTrackTimers(track) {
     if (track.probeTimer) clearInterval(track.probeTimer);
     if (track.refreshLoopTimer) clearInterval(track.refreshLoopTimer);
-    if (track.roomLoadTimer) clearTimeout(track.roomLoadTimer);
-    if (track.refreshTimer) clearTimeout(track.refreshTimer);
+    for (const pending of track.pendingRoomLoads?.values() || []) {
+      if (pending?.timer) clearTimeout(pending.timer);
+    }
+    for (const refresh of track.refreshTimers?.values() || []) {
+      if (refresh?.timer) clearTimeout(refresh.timer);
+    }
+    track.pendingRoomLoads?.clear();
+    track.refreshTimers?.clear();
     track.probeTimer = null;
     track.refreshLoopTimer = null;
-    track.roomLoadTimer = null;
-    track.refreshTimer = null;
   }
 
   unwatch(client, { silent = false } = {}) {
@@ -276,7 +349,12 @@ export class RadarTracker {
       this.alerts.delete(alert.endpoint);
     }
     track.alerts.clear();
-    if (track.room) this.releaseRoom(track.room.roomId);
+    if (track.rooms?.size) {
+      for (const rid of [...track.rooms.keys()]) this.releaseRoom(rid);
+      track.rooms.clear();
+    } else if (track.room) {
+      this.releaseRoom(track.room.roomId);
+    }
     this.imq.removeTarget(track.cid);
     this.tracks.delete(track.cid);
     this.log.info(`[tracker] parou de vigiar ${track.nick} (${track.cid})`);
@@ -331,21 +409,70 @@ export class RadarTracker {
     return [...track.occupants.values()];
   }
 
+  /** Payload de UMA sala ativa (card do frontend). */
+  roomPayload(entry) {
+    if (!entry?.room) return null;
+    const total = entry.occupants?.size || 0;
+    return {
+      ...entry.room,
+      type: entry.type,
+      typeLabel: ROOM_TYPE_LABEL[entry.type] || "",
+      detectedBy: entry.detectedBy || "",
+      lastSeenAt: entry.lastSeenAt || 0,
+      occupancy: Math.max(Number(entry.room.occupancy) || 0, total),
+      occupants: [...(entry.occupants?.values() || [])],
+      total,
+    };
+  }
+
+  /** Lista de salas ativas, mais recente primeiro. */
+  roomList(track) {
+    return [...track.rooms.values()]
+      .sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0))
+      .map((entry) => this.roomPayload(entry))
+      .filter(Boolean);
+  }
+
+  /**
+   * Define a sala primaria (a mais recente). Mantem `track.room` e
+   * `track.occupants` para os consumidores antigos (push, Telegram).
+   */
+  selectPrimary(track) {
+    let best = null;
+    for (const entry of track.rooms.values()) {
+      if (!best || (entry.lastSeenAt || 0) > (best.lastSeenAt || 0)) best = entry;
+    }
+    if (!best) {
+      track.room = null;
+      track.occupants = new Map();
+      return null;
+    }
+    track.room = best.room;
+    track.occupants = best.occupants;
+    return best;
+  }
+
+  syncPrimaryOccupants(track, rid) {
+    const entry = track.rooms.get(String(rid || ""));
+    if (entry && track.room?.roomId === entry.room.roomId) {
+      track.occupants = entry.occupants;
+    }
+  }
+
   roomMessage(track) {
-    const room = track.room
-      ? {
-          ...track.room,
-          occupancy: Math.max(Number(track.room.occupancy) || 0, track.occupants.size),
-          total: track.occupants.size,
-        }
-      : null;
+    const rooms = this.roomList(track);
+    const primaryId = String(track.room?.roomId || "");
+    const room = rooms.find((item) => item.roomId === primaryId) || rooms[0] || null;
     return {
       type: "room",
       target: track.profile,
       nick: track.nick,
+      // `rooms` e a lista multi-sala; `room`/`occupants` continuam sendo a
+      // sala primaria para clientes antigos.
       room,
-      occupants: this.occupantList(track),
-      total: track.occupants.size,
+      rooms,
+      occupants: room?.occupants || this.occupantList(track),
+      total: room?.total ?? track.occupants.size,
       detectedBy: track.detectedBy,
       at: now(),
     };
@@ -654,7 +781,13 @@ export class RadarTracker {
       }
 
       track.syncBackoffUntil = 0;
-      if (track.room?.roomId === rid) return true;
+      const existing = track.rooms.get(rid);
+      if (existing) {
+        // current_room aponta para uma sala ja ativa: so reafirma o frescor.
+        existing.lastSeenAt = now();
+        this.selectPrimary(track);
+        return true;
+      }
 
       // My Room na relation costuma ficar "presa" enquanto o alvo esta em
       // sala de terceiro. Lista de amigos/IMQ vencem essa leitura.
@@ -701,7 +834,7 @@ export class RadarTracker {
     if (track.probeInFlight) return track.probeInFlight;
     track.probeInFlight = (async () => {
       // Primeiro tenta a relation current_room do IMVU (uma request barata).
-      if (!track.room && !track.locationHidden) {
+      if (!track.rooms.size && !track.locationHidden) {
         const relationRoom = await this.api.currentRoom(track.cid, 0).catch(() => "");
         if (this.tracks.get(track.cid) !== track) return;
         if (relationRoom) {
@@ -712,16 +845,17 @@ export class RadarTracker {
 
       // Rechecagem periodica do catvu: se o alvo entrou/esta parado numa sala
       // que o evento do IMQ nao cobriu, o find devolve o roomId exato.
-      if (!track.room && !track.locationHidden && now() - (track.catvuLastTry || 0) > CATVU_RETRY_MS) {
+      if (!track.rooms.size && !track.locationHidden && now() - (track.catvuLastTry || 0) > CATVU_RETRY_MS) {
         track.catvuLastTry = now();
         const result = await catvuFind(track.nick, { timeout: 8_000 }).catch(() => null);
         if (this.tracks.get(track.cid) !== track) return;
         if (result && (await this.applyCatvuResult(track, result, track.gen))) return;
       }
 
+      // Varre as filas chat-<cid>-* mesmo com salas ativas: e assim que
+      // salas adicionais (multi-room) entram na lista.
       const live = await this.imq.probeQueues(track.cid, PROBE_TIMEOUT_MS);
       if (this.tracks.get(track.cid) !== track) return;
-      if (track.room) return;
       await this.evaluateLive(track, live);
     })()
       .catch((error) => {
@@ -741,22 +875,29 @@ export class RadarTracker {
       return;
     }
 
-    // 1) Confirma pelo roster quando ainda nao temos nenhuma leitura anterior.
-    if (track.lastLive.size === 0) {
-      for (const rid of own.slice(0, 6)) {
-        const people = await this.api.roster(rid, 0).catch(() => []);
-        if (this.tracks.get(track.cid) !== track || track.room) return;
-        if (people.some((person) => person.cid === track.cid)) {
-          await this.setRoom(track, rid, { seed: people, via: "probe_roster", gen: track.gen });
-          return;
-        }
+    const missing = own.filter((rid) => !track.rooms.has(rid));
+
+    // 1) Confirma pelo roster TODAS as salas vivas onde o alvo aparece.
+    //    Sem filtro de privacy: sala publica entra igual a privada.
+    let added = 0;
+    for (const rid of missing.slice(0, 8)) {
+      if (this.tracks.get(track.cid) !== track) return;
+      const people = await this.api.roster(rid, 0).catch(() => []);
+      if (this.tracks.get(track.cid) !== track) return;
+      if (people.some((person) => person.cid === track.cid)) {
+        await this.setRoom(track, rid, { seed: people, via: "probe_roster", gen: track.gen });
+        added += 1;
       }
     }
+    if (added) {
+      track.lastLive = new Set(own);
+      return;
+    }
 
-    // 2) Sala nova que apareceu entre dois probes.
+    // 2) Sala nova unica que apareceu entre dois probes (sem roster legivel).
     if (track.lastLive.size > 0) {
-      const fresh = own.filter((rid) => !track.lastLive.has(rid));
-      if (fresh.length === 1) {
+      const fresh = missing.filter((rid) => !track.lastLive.has(rid));
+      if (fresh.length === 1 && !track.rooms.size) {
         await this.setRoom(track, fresh[0], { via: "imq_new", gen: track.gen });
         return;
       }
@@ -765,7 +906,7 @@ export class RadarTracker {
     // 3) My Room (<cid>-1) viva em dois probes seguidos.
     if (own.includes(`${track.cid}-1`)) {
       track.myRoomStreak += 1;
-      if (track.myRoomStreak >= 2) {
+      if (track.myRoomStreak >= 2 && !track.rooms.has(`${track.cid}-1`)) {
         await this.setRoom(track, `${track.cid}-1`, { via: "myroom", gen: track.gen });
         return;
       }
@@ -773,8 +914,8 @@ export class RadarTracker {
       track.myRoomStreak = 0;
     }
 
-    // 4) Uma unica sala privada viva.
-    if (own.length === 1) {
+    // 4) Uma unica sala viva e nenhuma rastreada ainda.
+    if (own.length === 1 && !track.rooms.size) {
       await this.setRoom(track, own[0], { via: "imq_probe", gen: track.gen });
       return;
     }
@@ -826,24 +967,35 @@ export class RadarTracker {
       this.log.info(`[tracker] ${track.nick}: localizacao voltou a ser visivel (${via})`);
     }
 
-    if (track.room?.roomId === id) {
-      await this.refreshRoom(track, { notify: true });
+    // Sala ja ativa: somente reafirma a presenca (nao recria o card).
+    const existing = track.rooms.get(id);
+    if (existing) {
+      existing.lastSeenAt = now();
+      existing.detectedBy = via;
+      if (Array.isArray(seed) && seed.length) {
+        const previous = existing.occupants;
+        existing.occupants = this.buildOccupants(track, seed);
+        this.syncPrimaryOccupants(track, id);
+        if (existing.occupants.size !== previous.size) {
+          this.broadcast(track, this.roomMessage(track));
+        }
+      }
+      this.selectPrimary(track);
       return;
     }
 
-    const hintName = String(hint?.name || "").trim();
+    const hintName = String(hint?.name || hint?.roomName || "").trim();
     const hintPrivate = Boolean(
       hint?.isPrivate ?? hint?.is_private ?? String(hint?.privacy || "").toLowerCase() === "private"
     );
-    const suffix = id.split("-").pop();
-    const ownMyRoom = suffix === "1" && id.startsWith(`${track.cid}-`);
-    const fallbackName =
-      hintName || (ownMyRoom ? "My Room" : hintPrivate ? `Sala privada (ID: ${id})` : `Sala ${id}`);
+    const ownMyRoom = id === `${track.cid}-1`;
+    const initialPrivacy = hintPrivate ? "private" : "public";
     const fallbackRoom = {
       roomId: id,
-      name: fallbackName,
-      privacy: hintPrivate ? "private" : "public",
+      name: displayRoomName(hintName, id, { ownMyRoom }),
+      privacy: initialPrivacy,
       privacyLabel: hintPrivate ? "Privada" : "Pública",
+      type: classifyRoomType(track.cid, id, initialPrivacy, hint),
       restricted: hintPrivate,
       owner: "",
       occupancy: Array.isArray(seed) ? seed.length : 0,
@@ -859,31 +1011,36 @@ export class RadarTracker {
       source: hint ? "catvu" : "imvu",
     };
 
-    if (track.room?.roomId && track.room.roomId !== id) {
-      this.releaseRoom(track.room.roomId);
-    }
-    this.acquireRoom(id);
-
     const previousRoom = track.room;
     const seq = (track.roomSetSeq || 0) + 1;
     track.roomSetSeq = seq;
-    track.room = fallbackRoom;
+    const entry = {
+      room: fallbackRoom,
+      occupants: this.buildOccupants(track, seed || []),
+      type: fallbackRoom.type,
+      detectedBy: via,
+      lastSeenAt: now(),
+      lastRefreshedAt: 0,
+      catvuSnapshotAt: 0,
+      catvuSnapshotLoading: false,
+      seq,
+    };
+
+    this.acquireRoom(id);
+    track.rooms.set(id, entry);
+    this.selectPrimary(track);
     track.detectedBy = via;
-    track.occupants = this.buildOccupants(track, seed || []);
-    track.catvuSnapshotAt = 0;
-    track.catvuSnapshotLoading = false;
-    track.pendingJoins.clear();
     track.state = "online";
-    track.statusMsg = `Na sala ${fallbackRoom.name}`;
+    track.statusMsg = `Na sala ${fallbackRoom.name || id}`;
     track.lastLive = new Set();
     track.myRoomStreak = 0;
     track.lastRosterRefreshAt = now();
 
-    // A sala entra no painel imediatamente (relation/IMQ). Metadados e roster
+    // O card entra no painel imediatamente (relation/IMQ). Metadados e roster
     // sao enriquecidos depois, sem bloquear a deteccao.
     this.broadcast(track, this.roomMessage(track));
     this.broadcast(track, this.statusMessage(track, "online", track.statusMsg));
-    this.log.info(`[tracker] ${track.nick} -> ${fallbackRoom.name} (${id}) via ${via}`);
+    this.log.info(`[tracker] ${track.nick} -> ${fallbackRoom.name || id} (${id}) via ${via}`);
 
     // Hook externo (ex.: alertas do Telegram). Nao interfere no fluxo do radar.
     if (typeof this.onRoomChange === "function") {
@@ -899,39 +1056,47 @@ export class RadarTracker {
       seed ? Promise.resolve(seed) : this.api.roster(id, 0).catch(() => []),
     ]);
     if (!this.isActive(track, gen)) return;
-    if (track.roomSetSeq !== seq || track.room?.roomId !== id) return;
+    const liveEntry = track.rooms.get(id);
+    if (!liveEntry || liveEntry.seq !== seq) return;
 
+    let privacy = initialPrivacy;
     let room = { ...fallbackRoom };
     if (info) {
       const isPrivate = info.privacy === "private" || Boolean(info.restricted);
+      privacy = isPrivate ? "private" : "public";
       room = {
         ...fallbackRoom,
         ...info,
         roomId: id,
-        privacy: isPrivate ? "private" : "public",
+        name: displayRoomName(info.name, id, { ownMyRoom }),
+        privacy,
         privacyLabel: isPrivate ? "Privada" : "Pública",
         restricted: Boolean(info.restricted),
+        directLink: String(info.directLink || fallbackRoom.directLink || `imvu://room/${id}`),
+        webLink: String(info.webLink || fallbackRoom.webLink || ""),
       };
     }
 
     // Nao deixa um nome generico ("Sala 123-4"/"Sala privada (ID: ...)")
     // sobrescrever um nome real ja resolvido pelo catvu.
     const infoName = String(room.name || "").trim();
-    const liveName = String(track.room?.name || "").trim();
-    if (isGenericRoomName(infoName, id) && !isGenericRoomName(liveName, id)) {
+    const liveName = String(liveEntry.room.name || "").trim();
+    if (isGenericRoomName(infoName, id) && liveName && !isGenericRoomName(liveName, id)) {
       room.name = liveName;
     } else if (isGenericRoomName(infoName, id)) {
-      room.name = hintName || infoName || fallbackName;
-    } else {
-      room.name = infoName;
+      room.name = displayRoomName(hintName, id, { ownMyRoom });
     }
 
-    track.room = room;
-    track.occupants = this.buildOccupants(track, people);
-    track.statusMsg = `Na sala ${room.name}`;
+    room.type = classifyRoomType(track.cid, id, privacy, info);
+    liveEntry.room = room;
+    liveEntry.type = room.type;
+    liveEntry.occupants = this.buildOccupants(track, people);
+    liveEntry.lastRefreshedAt = now();
+    this.selectPrimary(track);
+    track.statusMsg = `Na sala ${room.name || id}`;
 
     const needsCatvuWatch =
-      room.privacy === "private" ||
+      privacy === "private" ||
       room.restricted ||
       people.length === 0 ||
       via.startsWith("catvu_private");
@@ -943,9 +1108,10 @@ export class RadarTracker {
     this.broadcast(track, this.statusMessage(track, "online", track.statusMsg));
 
     if (track.alerts.size) {
+      const roomLabel = room.name || (privacy === "private" ? `Sala Privada (ID: ${id})` : `Sala ${id}`);
       this.pushTrack(track, {
-        title: previousRoom?.roomId && previousRoom.roomId !== id ? "Mudou de sala" : "Está na sala",
-        body: `${track.profile.displayName || track.nick} • ${room.name}${room.privacy === "private" ? " (privada)" : ""}`,
+        title: previousRoom?.roomId && previousRoom.roomId !== id ? "Entrou em outra sala" : "Está na sala",
+        body: `${track.profile.displayName || track.nick} • ${roomLabel}${privacy === "private" ? " (privada)" : ""}`,
         tag: `room-${id}`,
       });
     }
@@ -967,43 +1133,51 @@ export class RadarTracker {
     };
   }
 
-  emitOccupantJoin(track, person) {
+  emitOccupantJoin(track, person, rid = "") {
+    const id = String(rid || track.room?.roomId || track.catvuRoomId || "");
+    const entry = track.rooms.get(id);
+    const total = entry?.occupants.size ?? track.occupants.size;
     this.broadcast(track, {
       type: "occupant_join",
       target: track.profile,
       nick: track.nick,
-      room: track.room?.roomId || track.catvuRoomId,
+      room: id,
       cid: person.cid,
       occupant: person,
-      total: track.occupants.size,
+      total,
       at: now(),
     });
     if (track.alerts.size) {
+      const roomName = entry?.room?.name || track.room?.name || "sala";
       this.pushTrack(track, {
         title: "Entrou na sala",
-        body: `${person.displayName || person.username} entrou em ${track.room?.name || "sala"}`,
+        body: `${person.displayName || person.username} entrou em ${roomName}`,
         tag: `join-${person.cid}-${now()}`,
         occupants: true,
       });
     }
   }
 
-  emitOccupantLeave(track, person) {
+  emitOccupantLeave(track, person, rid = "") {
+    const id = String(rid || track.room?.roomId || track.catvuRoomId || "");
+    const entry = track.rooms.get(id);
+    const total = entry?.occupants.size ?? track.occupants.size;
     this.broadcast(track, {
       type: "occupant_leave",
       target: track.profile,
       nick: track.nick,
-      room: track.room?.roomId || track.catvuRoomId,
+      room: id,
       cid: person.cid,
       nickOut: person.username,
       occupant: person,
-      total: track.occupants.size,
+      total,
       at: now(),
     });
     if (track.alerts.size) {
+      const roomName = entry?.room?.name || track.room?.name || "sala";
       this.pushTrack(track, {
         title: "Saiu da sala",
-        body: `${person.displayName || person.username} saiu de ${track.room?.name || "sala"}`,
+        body: `${person.displayName || person.username} saiu de ${roomName}`,
         tag: `leave-${person.cid}-${now()}`,
         occupants: true,
       });
@@ -1063,25 +1237,32 @@ export class RadarTracker {
    * Depois disso o IMQ (chat-<roomId>) mantem joined/left em tempo real.
    */
   async loadCatvuSnapshot(track, rid) {
-    if (this.tracks.get(track.cid) !== track || track.room?.roomId !== rid) return;
-    if (track.catvuSnapshotLoading) return;
+    const id = String(rid || "");
+    const entry = track.rooms.get(id);
+    if (!entry) return;
+    if (entry.catvuSnapshotLoading) return;
     // No Render a busca vai pelo Jina e é mais lenta: espaça mais.
     const minInterval = process.env.RENDER === "true" ? 60_000 : 15_000;
-    if (track.catvuSnapshotAt && now() - track.catvuSnapshotAt < minInterval) return;
-    track.catvuSnapshotLoading = true;
+    if (entry.catvuSnapshotAt && now() - entry.catvuSnapshotAt < minInterval) return;
+    entry.catvuSnapshotLoading = true;
     try {
-      const snapshot = await catvuRoomSnapshot(rid, track.nick, { timeout: 30_000 });
-      if (this.tracks.get(track.cid) !== track || track.room?.roomId !== rid) return;
+      const snapshot = await catvuRoomSnapshot(id, track.nick, { timeout: 30_000 });
+      if (this.tracks.get(track.cid) !== track) return;
+      const live = track.rooms.get(id);
+      if (!live) return;
 
       if (snapshot?.room?.name) {
-        const currentName = String(track.room.name || "");
-        if (!currentName || currentName === rid || currentName.startsWith("Sala ")) {
-          track.room = { ...track.room, name: snapshot.room.name };
+        const currentName = String(live.room.name || "");
+        if (!currentName || currentName === id || currentName.startsWith("Sala ")) {
+          live.room = { ...live.room, name: String(snapshot.room.name) };
         }
       }
-      if (snapshot?.room?.isPrivate && track.room.privacy !== "private") {
-        track.room = { ...track.room, privacy: "private", privacyLabel: "Privada" };
+      if (snapshot?.room?.isPrivate && live.room.privacy !== "private") {
+        live.room = { ...live.room, privacy: "private", privacyLabel: "Privada" };
       }
+      live.room.type = classifyRoomType(track.cid, id, live.room.privacy, live.room);
+      live.type = live.room.type;
+      if (track.room?.roomId === id) track.room = live.room;
 
       const people = (snapshot?.participants || [])
         .map((person) => ({
@@ -1098,39 +1279,45 @@ export class RadarTracker {
         .filter((person) => /^\d+$/.test(person.cid));
 
       if (people.length) {
-        this.applyCatvuPeople(track, people, { initial: true });
-        this.enrichOccupants(track, people.map((person) => person.cid)).catch(() => {});
+        this.applyCatvuPeople(track, people, { initial: true, rid: id });
+        this.enrichOccupants(track, people.map((person) => person.cid), id).catch(() => {});
       }
 
-      track.catvuSnapshotAt = now();
+      live.catvuSnapshotAt = now();
       if (snapshot?.room?.name) this.broadcast(track, this.roomMessage(track));
     } catch (error) {
-      this.log.warn(`[catvu] snapshot ${rid} falhou: ${error?.message || error}`);
-      track.catvuSnapshotAt = now();
+      this.log.warn(`[catvu] snapshot ${id} falhou: ${error?.message || error}`);
+      const live = track.rooms.get(id);
+      if (live) live.catvuSnapshotAt = now();
     } finally {
-      track.catvuSnapshotLoading = false;
+      const live = track.rooms.get(id);
+      if (live) live.catvuSnapshotLoading = false;
     }
   }
 
   /** Completa os ocupantes do catvu com o avatar 2D do IMVU (api.imvu.com). */
-  async enrichOccupants(track, cids) {
-    const rid = track.room?.roomId;
+  async enrichOccupants(track, cids, rid = track.room?.roomId) {
+    const id = String(rid || "");
+    const entry = track.rooms.get(id);
+    if (!entry) return;
     const unique = [...new Set((cids || []).filter((cid) => /^\d+$/.test(String(cid))))];
     let index = 0;
     const workers = Array.from({ length: Math.min(4, unique.length || 1) }, async () => {
       while (true) {
         const i = index++;
         if (i >= unique.length) return;
-        if (this.tracks.get(track.cid) !== track || track.room?.roomId !== rid) return;
+        const live = track.rooms.get(id);
+        if (this.tracks.get(track.cid) !== track || !live) return;
         const cid = unique[i];
-        const current = track.occupants.get(cid);
+        const current = live.occupants.get(cid);
         if (!current || current.avatarPortrait) continue;
         const person = await this.api.resolveCid(cid).catch(() => null);
         if (!person) continue;
-        if (this.tracks.get(track.cid) !== track || track.room?.roomId !== rid) return;
-        const existing = track.occupants.get(cid);
+        const after = track.rooms.get(id);
+        if (this.tracks.get(track.cid) !== track || !after) return;
+        const existing = after.occupants.get(cid);
         if (!existing) continue;
-        track.occupants.set(cid, this.mergeOccupant(existing, occupantFromPerson(person)));
+        after.occupants.set(cid, this.mergeOccupant(existing, occupantFromPerson(person)));
       }
     });
     await Promise.all(workers);
@@ -1139,10 +1326,11 @@ export class RadarTracker {
     }
   }
 
-  applyCatvuPeople(track, people, { initial = false } = {}) {
-    const rid = track.room?.roomId || track.catvuRoomId;
-    if (!rid) return;
-    const old = track.occupants;
+  applyCatvuPeople(track, people, { initial = false, rid = "" } = {}) {
+    const id = String(rid || track.catvuRoomId || track.room?.roomId || "");
+    const entry = track.rooms.get(id);
+    if (!entry) return;
+    const old = entry.occupants;
     const next = new Map();
     next.set(track.cid, old.get(track.cid) || occupantFromPerson(track.profile));
 
@@ -1152,37 +1340,46 @@ export class RadarTracker {
       next.set(person.cid, this.mergeOccupant(old.get(person.cid), incoming));
     }
 
-    track.occupants = next;
+    entry.occupants = next;
+    this.syncPrimaryOccupants(track, id);
 
     if (!initial) {
       for (const person of next.values()) {
         if (person.cid === track.cid) continue;
-        if (!old.has(person.cid)) this.emitOccupantJoin(track, person);
+        if (!old.has(person.cid)) this.emitOccupantJoin(track, person, id);
       }
       for (const person of old.values()) {
         if (person.cid === track.cid) continue;
-        if (!next.has(person.cid)) this.emitOccupantLeave(track, person);
+        if (!next.has(person.cid)) this.emitOccupantLeave(track, person, id);
       }
     }
 
     this.broadcast(track, this.roomMessage(track));
   }
 
-  applyCatvuJoin(track, person) {
+  applyCatvuJoin(track, person, rid = "") {
     if (person.cid === track.cid) return;
-    const previous = track.occupants.get(person.cid);
+    const id = String(rid || track.catvuRoomId || track.room?.roomId || "");
+    const entry = track.rooms.get(id);
+    if (!entry) return;
+    const previous = entry.occupants.get(person.cid);
     const occupant = this.mergeOccupant(previous, occupantFromPerson(person));
-    track.occupants.set(person.cid, occupant);
-    if (!previous) this.emitOccupantJoin(track, occupant);
+    entry.occupants.set(person.cid, occupant);
+    this.syncPrimaryOccupants(track, id);
+    if (!previous) this.emitOccupantJoin(track, occupant, id);
     this.broadcast(track, this.roomMessage(track));
   }
 
-  applyCatvuLeave(track, person) {
+  applyCatvuLeave(track, person, rid = "") {
     if (person.cid === track.cid) return;
-    const existing = track.occupants.get(person.cid);
+    const id = String(rid || track.catvuRoomId || track.room?.roomId || "");
+    const entry = track.rooms.get(id);
+    if (!entry) return;
+    const existing = entry.occupants.get(person.cid);
     if (!existing) return;
-    track.occupants.delete(person.cid);
-    this.emitOccupantLeave(track, existing);
+    entry.occupants.delete(person.cid);
+    this.syncPrimaryOccupants(track, id);
+    this.emitOccupantLeave(track, existing, id);
     this.broadcast(track, this.roomMessage(track));
   }
 
@@ -1191,18 +1388,24 @@ export class RadarTracker {
    * Resolve o cid no IMVU e adiciona na hora — funciona mesmo quando o
    * roster HTTP da sala privada vem 403.
    */
-  async ensureOccupant(track, cid) {
+  async ensureOccupant(track, cid, rid = "") {
     const id = String(cid || "");
-    if (!/^\d+$/.test(id)) return;
-    if (this.tracks.get(track.cid) !== track || !track.room) return;
+    const roomId = String(rid || track.room?.roomId || "");
+    if (!/^\d+$/.test(id) || !/^\d+-\d+$/.test(roomId)) return;
+    if (this.tracks.get(track.cid) !== track) return;
+    const entry = track.rooms.get(roomId);
+    if (!entry) return;
     if (id === track.cid) return;
-    if (track.occupants.has(id) || track.pendingJoins.has(id)) return;
+    const pendingKey = `${roomId}:${id}`;
+    if (entry.occupants.has(id) || track.pendingJoins.has(pendingKey)) return;
 
-    track.pendingJoins.add(id);
+    track.pendingJoins.add(pendingKey);
     try {
       const person = await this.api.resolveCid(id).catch(() => null);
-      if (this.tracks.get(track.cid) !== track || !track.room) return;
-      if (track.occupants.has(id)) return;
+      if (this.tracks.get(track.cid) !== track) return;
+      const live = track.rooms.get(roomId);
+      if (!live) return;
+      if (live.occupants.has(id)) return;
       const occupant = person
         ? occupantFromPerson(person)
         : {
@@ -1218,103 +1421,150 @@ export class RadarTracker {
             isAp: false,
             online: true,
           };
-      track.occupants.set(id, occupant);
-      this.emitOccupantJoin(track, occupant);
+      live.occupants.set(id, occupant);
+      this.syncPrimaryOccupants(track, roomId);
+      this.emitOccupantJoin(track, occupant, roomId);
       this.broadcast(track, this.roomMessage(track));
     } finally {
-      track.pendingJoins.delete(id);
+      track.pendingJoins.delete(pendingKey);
     }
   }
 
   clearRoom(track, reason = "left") {
-    if (!track.room) return;
-    this.stopCatvuWatch(track);
-    const oldRoom = track.room;
-    // Saiu da sala rastreada: qualquer leitura antiga de presenca deixou de
-    // valer e nao pode bloquear a proxima relacao current_room.
-    track.presenceRoom = "";
-    track.presenceRoomAt = 0;
-    track.lastLeftRoom = oldRoom.roomId;
+    const rid = track.room?.roomId;
+    if (!rid) return;
+    this.removeRoom(track, rid, reason);
+  }
+
+  /** Remove UMA sala da lista ativa (evento deleted/left do IMQ). */
+  removeRoom(track, rid, reason = "left") {
+    const id = String(rid || "");
+    const entry = track.rooms.get(id);
+    if (!entry) return;
+    if (track.catvuRoomId === id) this.stopCatvuWatch(track);
+
+    track.rooms.delete(id);
+    this.releaseRoom(id);
+
+    if (track.presenceRoom === id) {
+      track.presenceRoom = "";
+      track.presenceRoomAt = 0;
+    }
+    track.lastLeftRoom = id;
     track.lastLeftAt = now();
     track.locationHidden = false;
     track.locationHiddenAt = 0;
-    this.releaseRoom(oldRoom.roomId);
-    track.room = null;
-    track.occupants.clear();
-    track.catvuSnapshotAt = 0;
-    track.catvuSnapshotLoading = false;
-    track.pendingJoins.clear();
-    track.detectedBy = "";
-    track.state = "offline";
-    track.statusMsg = "Fora de sala. Monitorando em tempo real...";
 
+    const refresh = track.refreshTimers.get(id);
+    if (refresh) {
+      clearTimeout(refresh.timer);
+      track.refreshTimers.delete(id);
+    }
+
+    const wasPrimary = track.room?.roomId === id;
+    this.selectPrimary(track);
+    if (wasPrimary && track.room) {
+      track.detectedBy = track.rooms.get(track.room.roomId)?.detectedBy || "";
+      track.state = "online";
+      track.statusMsg = `Na sala ${track.room.name || track.room.roomId}`;
+    } else if (!track.rooms.size) {
+      track.detectedBy = "";
+      track.state = "offline";
+      track.statusMsg = "Fora de sala. Monitorando em tempo real...";
+    }
+
+    const oldRoom = entry.room;
     this.broadcast(track, {
       type: "room_leave",
       target: track.profile,
       nick: track.nick,
       room: oldRoom,
+      rooms: this.roomList(track),
       reason,
       message: "Saiu da sala",
       at: now(),
     });
-    this.broadcast(track, this.statusMessage(track, "offline", track.statusMsg));
+    this.broadcast(track, this.roomMessage(track));
+    this.broadcast(track, this.statusMessage(track, track.state, track.statusMsg));
     if (track.alerts.size) {
+      const roomLabel =
+        oldRoom.name || (oldRoom.privacy === "private" ? `Sala Privada (ID: ${id})` : `Sala ${id}`);
       this.pushTrack(track, {
         title: "Saiu da sala",
-        body: `${track.profile.displayName || track.nick} saiu de ${oldRoom.name}`,
-        tag: `left-${oldRoom.roomId}`,
+        body: `${track.profile.displayName || track.nick} saiu de ${roomLabel}`,
+        tag: `left-${id}`,
       });
     }
 
     // Pode ter trocado de sala direto; uma sondagem curta resolve.
-    setTimeout(() => {
-      if (this.tracks.get(track.cid) === track && !track.room) {
-        this.probeTick(track).catch(() => {});
-      }
-    }, 2_500);
+    if (!track.rooms.size) {
+      setTimeout(() => {
+        if (this.tracks.get(track.cid) === track && !track.rooms.size) {
+          this.probeTick(track).catch(() => {});
+        }
+      }, 2_500);
+    }
   }
 
-  async refreshRoom(track, { notify = false } = {}) {
+  async refreshRoom(track, options = {}) {
     const rid = track.room?.roomId;
     if (!rid) return;
+    await this.refreshRoomById(track, rid, options);
+  }
+
+  async refreshRoomById(track, rid, { notify = false } = {}) {
+    const id = String(rid || "");
+    const entry = track.rooms.get(id);
+    if (!entry) return;
     const [info, people] = await Promise.all([
-      this.api.roomInfo(rid, track.room).catch(() => null),
-      this.api.roster(rid, 0).catch(() => []),
+      this.api.roomInfo(id, entry.room).catch(() => null),
+      this.api.roster(id, 0).catch(() => []),
     ]);
-    if (track.room?.roomId !== rid) return;
+    if (this.tracks.get(track.cid) !== track) return;
+    const live = track.rooms.get(id);
+    if (!live || live !== entry) return;
+    live.lastRefreshedAt = now();
 
     if (info) {
-      const infoName = String(info.name || "").trim();
-      const currentName = String(track.room.name || "").trim();
-      const name =
-        isGenericRoomName(infoName, rid) && !isGenericRoomName(currentName, rid)
-          ? currentName
-          : infoName || currentName;
-      track.room = {
-        ...track.room,
+      const isPrivate = info.privacy === "private" || Boolean(info.restricted);
+      const ownMyRoom = id === `${track.cid}-1`;
+      const infoName = displayRoomName(info.name, id, { ownMyRoom });
+      const liveName = displayRoomName(live.room.name, id, { ownMyRoom });
+      live.room = {
+        ...live.room,
         ...info,
-        name,
+        name: liveName || infoName,
+        privacy: isPrivate ? "private" : "public",
+        privacyLabel: isPrivate ? "Privada" : "Pública",
+        restricted: Boolean(info.restricted),
         occupancy: Math.max(Number(info.occupancy) || 0, people.length),
       };
+      live.room.type = classifyRoomType(track.cid, id, live.room.privacy, info);
+      live.type = live.room.type;
+      if (track.room?.roomId === id) {
+        track.room = live.room;
+        track.statusMsg = `Na sala ${live.room.name || id}`;
+      }
     }
 
-    const needsPrivateFill = track.room.privacy === "private" || track.room.restricted;
-    if (needsPrivateFill && (!track.catvuSnapshotAt || now() - track.catvuSnapshotAt > 60_000)) {
-      this.loadCatvuSnapshot(track, rid).catch(() => {});
+    const needsPrivateFill = live.room.privacy === "private" || live.room.restricted;
+    if (needsPrivateFill && (!live.catvuSnapshotAt || now() - live.catvuSnapshotAt > 60_000)) {
+      this.loadCatvuSnapshot(track, id).catch(() => {});
     }
 
     // Roster vazio pode ser falha transitória (403/timeout) em sala privada.
     // Nesse caso preserva o snapshot anterior em vez de sumir com todo mundo.
-    if (!people.length && track.occupants.size > 1) {
+    if (!people.length && live.occupants.size > 1) {
       if (notify) this.broadcast(track, this.roomMessage(track));
       return;
     }
 
-    const old = track.occupants;
+    const old = live.occupants;
     const next = this.buildOccupants(track, people);
     const joins = [...next.values()].filter((person) => person.cid !== track.cid && !old.has(person.cid));
     const leaves = [...old.values()].filter((person) => person.cid !== track.cid && !next.has(person.cid));
-    track.occupants = next;
+    live.occupants = next;
+    this.syncPrimaryOccupants(track, id);
 
     if (notify) {
       for (const person of joins) {
@@ -1322,7 +1572,7 @@ export class RadarTracker {
           type: "occupant_join",
           target: track.profile,
           nick: track.nick,
-          room: rid,
+          room: id,
           cid: person.cid,
           occupant: person,
           total: next.size,
@@ -1334,7 +1584,7 @@ export class RadarTracker {
           type: "occupant_leave",
           target: track.profile,
           nick: track.nick,
-          room: rid,
+          room: id,
           cid: person.cid,
           nickOut: person.username,
           occupant: person,
@@ -1380,10 +1630,13 @@ export class RadarTracker {
       if (track.cid === cid) {
         if (isLiveAction(action)) {
           // O IMQ viu o alvo nesta sala: esta informacao vence a relation
-          // quando ela estiver presa na My Room.
+          // quando ela estiver presa na My Room. Cada sala vira um card.
           track.presenceRoom = room;
           track.presenceRoomAt = now();
-          if (track.room?.roomId !== room) {
+          const existing = track.rooms.get(room);
+          if (existing) {
+            existing.lastSeenAt = now();
+          } else {
             this.scheduleRoomLoad(track, room, "imq");
           }
         } else if (isLeftAction(action)) {
@@ -1391,22 +1644,23 @@ export class RadarTracker {
             track.presenceRoom = "";
             track.presenceRoomAt = 0;
           }
-          if (track.room?.roomId === room) {
-            this.clearRoom(track, "left");
-          }
+          // deleted chat-<cid>-<room_id>: remove SOMENTE essa sala.
+          this.removeRoom(track, room, "left");
         }
         continue;
       }
 
-      if (track.room?.roomId !== room) continue;
+      const entry = track.rooms.get(room);
+      if (!entry) continue;
 
       if (isLiveAction(action)) {
-        this.ensureOccupant(track, cid).catch(() => {});
-        this.scheduleRefresh(track, true);
+        this.ensureOccupant(track, cid, room).catch(() => {});
+        this.scheduleRefresh(track, room, true);
       } else if (isLeftAction(action)) {
-        const person = track.occupants.get(cid);
+        const person = entry.occupants.get(cid);
         if (person) {
-          track.occupants.delete(cid);
+          entry.occupants.delete(cid);
+          this.syncPrimaryOccupants(track, room);
           this.broadcast(track, {
             type: "occupant_leave",
             target: track.profile,
@@ -1415,12 +1669,12 @@ export class RadarTracker {
             cid,
             nickOut: person.username,
             occupant: person,
-            total: track.occupants.size,
+            total: entry.occupants.size,
             at: now(),
           });
           this.broadcast(track, this.roomMessage(track));
         }
-        this.scheduleRefresh(track, false);
+        this.scheduleRefresh(track, room, false);
       }
     }
   }
@@ -1440,37 +1694,47 @@ export class RadarTracker {
       if (track.cid !== cid) continue;
       track.presenceRoom = room;
       track.presenceRoomAt = now();
-      if (track.room?.roomId !== room) this.scheduleRoomLoad(track, room, "presence");
+      const existing = track.rooms.get(room);
+      if (existing) {
+        existing.lastSeenAt = now();
+      } else {
+        this.scheduleRoomLoad(track, room, "presence");
+      }
     }
   }
 
   scheduleRoomLoad(track, rid, source) {
     if (this.tracks.get(track.cid) !== track) return;
-    if (track.roomLoadTimer && track.pendingRoom === rid) return;
-    if (track.roomLoadTimer) clearTimeout(track.roomLoadTimer);
-    track.pendingRoom = rid;
-    track.roomLoadTimer = setTimeout(() => {
-      track.roomLoadTimer = null;
-      const target = track.pendingRoom;
-      track.pendingRoom = "";
-      if (!target || this.tracks.get(track.cid) !== track) return;
-      this.setRoom(track, target, { via: source, gen: track.gen }).catch((error) => {
-        this.log.warn(`[tracker] setRoom(${target}) falhou: ${error?.message || error}`);
+    const id = String(rid || "");
+    if (!/^\d+-\d+$/.test(id)) return;
+    if (track.rooms.has(id)) {
+      track.rooms.get(id).lastSeenAt = now();
+      return;
+    }
+    if (track.pendingRoomLoads.has(id)) return;
+    const timer = setTimeout(() => {
+      track.pendingRoomLoads.delete(id);
+      if (this.tracks.get(track.cid) !== track) return;
+      this.setRoom(track, id, { via: source, gen: track.gen }).catch((error) => {
+        this.log.warn(`[tracker] setRoom(${id}) falhou: ${error?.message || error}`);
       });
     }, 300);
+    track.pendingRoomLoads.set(id, { timer, source });
   }
 
-  scheduleRefresh(track, notify) {
+  scheduleRefresh(track, rid, notify = false) {
     if (this.tracks.get(track.cid) !== track) return;
-    track.refreshNotify = track.refreshNotify || Boolean(notify);
-    if (track.refreshTimer) clearTimeout(track.refreshTimer);
-    track.refreshTimer = setTimeout(() => {
-      track.refreshTimer = null;
-      const shouldNotify = track.refreshNotify;
-      track.refreshNotify = false;
+    const id = String(rid || track.room?.roomId || "");
+    if (!id) return;
+    const previous = track.refreshTimers.get(id);
+    const shouldNotify = Boolean(previous?.notify || notify);
+    if (previous?.timer) clearTimeout(previous.timer);
+    const timer = setTimeout(() => {
+      track.refreshTimers.delete(id);
       if (this.tracks.get(track.cid) !== track) return;
-      this.refreshRoom(track, { notify: shouldNotify }).catch(() => {});
+      this.refreshRoomById(track, id, { notify: shouldNotify }).catch(() => {});
     }, 450);
+    track.refreshTimers.set(id, { timer, notify: shouldNotify });
   }
 
   // ---------------- alertas Web Push ----------------
@@ -1588,7 +1852,7 @@ export class RadarTracker {
     if (track.room) {
       this.sendPushToAlert(alert, {
         title: "Sala atual",
-        body: `${track.profile.displayName || track.nick} • ${track.room.name}${track.room.privacy === "private" ? " (privada)" : ""}`,
+        body: `${track.profile.displayName || track.nick} • ${track.room.name || track.room.roomId}${track.room.privacy === "private" ? " (privada)" : ""}`,
         tag: `room-${track.room.roomId}`,
       });
     } else {
