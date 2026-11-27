@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import ffmpegPath from "ffmpeg-static";
 import { openMp3Stream } from "./songResolver.js";
 
 const clean = (value) => String(value ?? "").trim();
@@ -12,6 +14,66 @@ const PUBLIC_BASE = (
   clean(process.env.RENDER_EXTERNAL_URL) ||
   `http://localhost:${Number(process.env.PORT) || 8080}`
 ).replace(/\/+$/, "");
+
+// Silêncio MP3 de 1s, gerado pelo ffmpeg-static. É escrito em loop no
+// /radio.mp3 quando não há música tocando, para o IMVU não derrubar a conexão.
+let silenceMp3Promise = null;
+function getSilenceMp3() {
+  if (silenceMp3Promise) return silenceMp3Promise;
+  silenceMp3Promise = new Promise((resolve) => {
+    if (!ffmpegPath) {
+      resolve(null);
+      return;
+    }
+    let child;
+    try {
+      child = spawn(
+        ffmpegPath,
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "anullsrc=r=44100:cl=stereo",
+          "-t",
+          "1",
+          "-q:a",
+          "9",
+          "-acodec",
+          "libmp3lame",
+          "-f",
+          "mp3",
+          "pipe:1",
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] }
+      );
+    } catch {
+      resolve(null);
+      return;
+    }
+    const chunks = [];
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ignora */
+      }
+      resolve(null);
+    }, 8000);
+    child.stdout.on("data", (chunk) => chunks.push(chunk));
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on("close", () => {
+      clearTimeout(timer);
+      resolve(chunks.length ? Buffer.concat(chunks) : null);
+    });
+  });
+  return silenceMp3Promise;
+}
 
 const publicSong = (song) =>
   song
@@ -165,22 +227,30 @@ class RadioStream extends EventEmitter {
     }
   }
 
-  endListeners(room) {
+  hasPublicListeners(room) {
     for (const res of room.listeners) {
+      if (res.__publicRadio) return true;
+    }
+    return false;
+  }
+
+  endListeners(room) {
+    for (const res of [...room.listeners]) {
+      if (res.__publicRadio) continue;
       try {
         if (!res.writableEnded) res.end();
       } catch {
         /* ignora */
       }
+      room.listeners.delete(res);
     }
-    room.listeners.clear();
   }
 
   async pump(room) {
     if (room.playing || room.listeners.size === 0) return;
     const song = room.queue.shift();
     if (!song) {
-      this.endListeners(room);
+      if (!this.hasPublicListeners(room)) this.endListeners(room);
       this.emit("idle", room.id);
       return;
     }
@@ -204,7 +274,7 @@ class RadioStream extends EventEmitter {
       if (room.listeners.size > 0 && room.queue.length > 0) {
         void this.pump(room);
       } else {
-        this.endListeners(room);
+        if (!this.hasPublicListeners(room)) this.endListeners(room);
         this.emit("idle", room.id);
       }
       return;
@@ -233,7 +303,7 @@ class RadioStream extends EventEmitter {
       if (room.listeners.size > 0 && room.queue.length > 0) {
         void this.pump(room);
       } else if (room.listeners.size > 0) {
-        this.endListeners(room);
+        if (!this.hasPublicListeners(room)) this.endListeners(room);
         this.emit("idle", room.id);
       }
     };
@@ -296,8 +366,10 @@ class RadioStream extends EventEmitter {
   }
 
   serve(room, res) {
+    res.setTimeout?.(0);
     res.writeHead(200, {
       "Content-Type": "audio/mpeg",
+      "Transfer-Encoding": "chunked",
       "Cache-Control": "no-store, no-cache, must-revalidate",
       Pragma: "no-cache",
       Connection: "keep-alive",
@@ -314,21 +386,64 @@ class RadioStream extends EventEmitter {
     if (!room.playing) void this.pump(room);
   }
 
-  /** /radio.mp3: stream público da sala atual do bot, sem token. */
+  /**
+   * /radio.mp3: stream público contínuo. Se não houver música, escreve um
+   * silêncio MP3 em loop; quando o bot toca, os chunks da música entram no
+   * mesmo response.
+   */
+  servePublic(room, res) {
+    res.setTimeout?.(0);
+    res.writeHead(200, {
+      "Content-Type": "audio/mpeg",
+      "Transfer-Encoding": "chunked",
+      "Connection": "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Pragma": "no-cache",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+
+    res.__publicRadio = true;
+    room.listeners.add(res);
+    let silenceTimer = null;
+    let closed = false;
+
+    const cleanup = () => {
+      closed = true;
+      if (silenceTimer) clearInterval(silenceTimer);
+      silenceTimer = null;
+      room.listeners.delete(res);
+    };
+
+    const writeSilence = async () => {
+      if (closed || res.destroyed || res.writableEnded) return;
+      if (room.playing) return;
+      if (res.writableLength > MAX_LISTENER_BUFFER) return;
+      const buffer = await getSilenceMp3();
+      if (!buffer || closed || res.destroyed || res.writableEnded || room.playing) return;
+      try {
+        res.write(buffer);
+      } catch {
+        cleanup();
+      }
+    };
+
+    silenceTimer = setInterval(() => {
+      void writeSilence();
+    }, 1000);
+    res.__silenceTimer = silenceTimer;
+    res.on("close", cleanup);
+    res.on("error", cleanup);
+    void writeSilence();
+  }
+
   handlePublicRequest(req, res, roomId) {
-    const id = clean(roomId);
-    if (!/^\d+-\d+$/.test(id)) {
-      res.statusCode = 400;
-      res.end("invalid room");
-      return;
-    }
-    const room = this.rooms.get(id);
-    if (!room || (!room.current && room.queue.length === 0)) {
-      res.statusCode = 404;
-      res.end("off air");
-      return;
-    }
-    this.serve(room, res);
+    res.setTimeout?.(0);
+    const id = /^\d+-\d+$/.test(clean(roomId)) ? clean(roomId) : "__public__";
+    const room = this.getRoom(id);
+    this.servePublic(room, res);
+    if (!room.playing) void this.pump(room);
   }
 
   shutdown() {
@@ -336,7 +451,15 @@ class RadioStream extends EventEmitter {
       room.queue = [];
       room.generation += 1;
       this.stopOutput(room);
-      this.endListeners(room);
+      for (const res of [...room.listeners]) {
+        if (res.__silenceTimer) clearInterval(res.__silenceTimer);
+        try {
+          res.destroy?.();
+        } catch {
+          /* ignora */
+        }
+      }
+      room.listeners.clear();
     }
     this.rooms.clear();
   }

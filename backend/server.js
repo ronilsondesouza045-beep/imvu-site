@@ -206,12 +206,10 @@ app.get("/api/radio/:roomId/:file", (req, res) => {
 });
 
 app.get("/radio.mp3", (req, res) => {
-  const roomId = String(musicBot.roomId || "");
-  if (!/^\d+-\d+$/.test(roomId)) {
-    res.status(404).type("text/plain").send("Ative o DJ Bot em uma sala primeiro.");
-    return;
-  }
-  radioStream.handlePublicRequest(req, res, roomId);
+  // Stream contínuo: nunca responde 404; sem música toca silêncio em loop.
+  req.setTimeout(0);
+  res.setTimeout(0);
+  radioStream.handlePublicRequest(req, res, String(musicBot.roomId || ""));
 });
 
 app.post("/api/bot/join", async (req, res) => {
@@ -425,6 +423,11 @@ app.use(
 );
 
 const server = http.createServer(app);
+// Sem timeout para o stream de rádio ficar aberto no IMVU.
+server.requestTimeout = 0;
+server.headersTimeout = 0;
+server.keepAliveTimeout = 0;
+server.timeout = 0;
 const wss = new WebSocketServer({
   server,
   maxPayload: 16 * 1024,
