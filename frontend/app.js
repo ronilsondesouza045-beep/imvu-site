@@ -162,6 +162,7 @@
     cinema3dWrap: $("#cinema3dWrap"),
     cinema3dLoading: $("#cinema3dLoading"),
     cinema3dLoadingText: $("#cinema3dLoadingText"),
+    cinemaWebLink: $("#cinemaWebLink"),
     cinemaMessages: $("#cinemaMessages"),
     cinemaChatCount: $("#cinemaChatCount"),
     cinemaChatHint: $("#cinemaChatHint"),
@@ -1176,6 +1177,12 @@
     cinema.requestId = requestId;
 
     if (els.cinemaTitle) els.cinemaTitle.textContent = roomDisplayName(room);
+    if (els.cinemaWebLink) {
+      const webLink =
+        String(room.webLink || "").trim() ||
+        `https://www.imvu.com/next/chat/room-${cinema.roomId}/`;
+      els.cinemaWebLink.href = webLink;
+    }
     if (els.cinemaMeta) {
       els.cinemaMeta.textContent = `#${room.roomId} Â· ${
         roomTypeOf(room) === "PRIVATE" ? "privada" : "pÃºblica"
