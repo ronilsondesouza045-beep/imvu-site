@@ -638,3 +638,5 @@ server.listen(PORT, () => {
   log.info(`[server] WebSocket no mesmo host/porta · max watchers ${MAX_WATCHERS}`);
   log.info(`[server] Telegram bot: ${telegram.enabled ? "ativo" : "desligado (sem token)"}`);
 });
+
+// Modo Cinema 3D: hotfix de overlay (deploy 2026-11-27).
