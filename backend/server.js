@@ -41,7 +41,7 @@ const telegram = initTelegramBot({ tracker, log });
 tracker.onRoomChange = (track, previousRoom) => telegram.notifyRoomChange(track, previousRoom);
 
 // Modo Cinema: observa o chat classico sem entrar na sala (bot invisivel).
-const cinema = new CinemaService({ log });
+const cinema = new CinemaService({ tracker, log });
 
 const app = express();
 app.disable("x-powered-by");

@@ -138,6 +138,9 @@ export class ImqClient {
 
     this.targetCids = new Set();
     this.rooms = new Set();
+    // Filas avulsas (ex.: chat do Modo Cinema) e handlers de mensagem.
+    this.customQueues = new Set();
+    this.messageHandlers = new Map();
 
     this.reconnectTimer = null;
     this.watchdogTimer = null;
@@ -351,6 +354,9 @@ export class ImqClient {
       // em sala privada de terceiro onde o roster HTTP vem 403.
       all.add(`inv:/presence/presence-${room}`);
     }
+    for (const queue of this.customQueues) {
+      if (queue) all.add(queue);
+    }
     return [...all];
   }
 
@@ -389,6 +395,43 @@ export class ImqClient {
     const toRemove = [...this.subscribed].filter((queue) => !desired.has(queue));
     if (toAdd.length) this.subscribeQueues(toAdd);
     if (toRemove.length) this.unsubscribeQueues(toRemove);
+  }
+
+  /**
+   * Assina uma fila/mount avulsa e entrega as mensagens decodificadas
+   * (ex.: chat classico `/chat/<id>` mount `messages`). Nao entra na sala.
+   */
+  observeQueue(rawQueue, rawMount, handler) {
+    const queue = String(rawQueue || "").trim();
+    const mount = String(rawMount || "").trim();
+    if (!queue || !mount || typeof handler !== "function") {
+      return { close() {} };
+    }
+    const key = `${queue}|${mount}`;
+    let handlers = this.messageHandlers.get(key);
+    if (!handlers) {
+      handlers = new Set();
+      this.messageHandlers.set(key, handlers);
+    }
+    handlers.add(handler);
+    this.customQueues.add(queue);
+    if (this.authed) this.subscribeQueues([queue]);
+    let closed = false;
+    return {
+      close: () => {
+        if (closed) return;
+        closed = true;
+        const set = this.messageHandlers.get(key);
+        if (set) {
+          set.delete(handler);
+          if (!set.size) this.messageHandlers.delete(key);
+        }
+        if (!this.messageHandlers.has(key)) {
+          this.customQueues.delete(queue);
+          if (this.authed) this.unsubscribeQueues([queue]);
+        }
+      },
+    };
   }
 
   resubscribe() {
@@ -675,7 +718,45 @@ export class ImqClient {
   }
 
   handleSendMessage(message) {
-    if (String(message.mount || "") !== "edge:participants") return;
+    const queue = String(message.queue || "");
+    const mount = String(message.mount || "");
+    let handlers = this.messageHandlers.get(`${queue}|${mount}`);
+    if (!handlers?.size && this.messageHandlers.size) {
+      for (const [key, set] of this.messageHandlers) {
+        const sep = key.indexOf("|");
+        const registeredQueue = key.slice(0, sep);
+        const registeredMount = key.slice(sep + 1);
+        if (registeredMount !== mount) continue;
+        if (
+          registeredQueue === queue ||
+          queue.endsWith(registeredQueue) ||
+          registeredQueue.endsWith(queue)
+        ) {
+          handlers = set;
+          break;
+        }
+      }
+    }
+    if (handlers?.size) {
+      let payload;
+      try {
+        payload = JSON.parse(b64d(message.message));
+      } catch {
+        return;
+      }
+      if (!payload || typeof payload !== "object") return;
+      let userId = message.user_id ? b64d(message.user_id) : String(message.userId || "");
+      if (!/^\d+$/.test(userId)) userId = String(payload.userId || "");
+      for (const handler of handlers) {
+        try {
+          handler({ queue, mount, userId, payload });
+        } catch {
+          /* handler do cinema nao derruba o radar */
+        }
+      }
+      return;
+    }
+    if (mount !== "edge:participants") return;
     let payload;
     try {
       payload = JSON.parse(b64d(message.message));
@@ -685,7 +766,6 @@ export class ImqClient {
     const action = String(payload?.action || "");
     if (!action) return;
     const objects = Array.isArray(payload?.objects) ? payload.objects : [];
-    const queue = String(message.queue || "");
 
     let room = queue.startsWith("inv:/chat/chat-")
       ? queue.slice("inv:/chat/chat-".length)

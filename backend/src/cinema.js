@@ -1,84 +1,99 @@
-import { musicBot } from "./musicBot.js";
-
 const ROOM_RE = /^\d+-\d+$/;
 const MAX_RECENT = 40;
+const OCCUPANT_REFRESH_MS = 12_000;
 
 /**
- * Modo Cinema: observa o chat classico de uma sala SEM entrar nela.
+ * Modo Cinema: le o chat classico de uma sala SEM entrar nela.
  *
- * - `chat.observe()` le os participantes (join/leave/look) sem presenca.
- * - `realtime.listen(chat.imqQueue, chat.imqMessagesMount)` le as mensagens
- *   sem dar POST em /participants. O bot nunca aparece na sala.
+ * Usa a MESMA sessao IMQ do tracker (sem segundo login):
+ * - assina a fila `imq_queue`/`messages` do chat (mensagens);
+ * - le o roster por REST para os avatares e nomes.
+ * Nenhum POST em /participants e feito, entao o bot nunca aparece na sala.
  */
 export class CinemaService {
-  constructor({ log = console } = {}) {
+  constructor({ tracker, log = console } = {}) {
+    this.tracker = tracker;
     this.log = log;
     this.rooms = new Map();
     this.pending = new Map();
   }
 
-  async getClient() {
-    return musicBot.ensureClient();
+  occupantFromPerson(person) {
+    if (!person?.cid) return null;
+    if (String(person.cid) === String(this.tracker?.api?.cid || "")) return null;
+    return {
+      cid: String(person.cid),
+      username: String(person.username || person.cid),
+      displayName: String(person.displayName || person.username || person.cid),
+      avatar: person.avatar || "",
+      portrait: person.avatarPortrait || person.portrait || "",
+      lookImage: person.lookImage || "",
+      lookThumbnail: person.lookThumbnail || "",
+      seatNumber: person.seatNumber || 0,
+      isVip: Boolean(person.isVip),
+      isAp: Boolean(person.isAp),
+      online: Boolean(person.online),
+    };
+  }
+
+  occupantsFromPeople(people) {
+    const list = [];
+    for (const person of people || []) {
+      const occupant = this.occupantFromPerson(person);
+      if (occupant) list.push(occupant);
+    }
+    return list;
   }
 
   async createEntry(roomId) {
-    const client = await this.getClient();
-    const room = await client.rooms.fetch(roomId, { force: true });
-    if (!room) throw new Error("Sala nao encontrada.");
+    const tracker = this.tracker;
+    const logged = await tracker.ensureLogin();
+    if (!logged) throw new Error(tracker.api.lastError || "login falhou");
 
-    const chat = await room.chat();
+    const [chatEnv, people] = await Promise.all([
+      tracker.api.getJson(`/chat/chat-${roomId}`).catch(() => null),
+      tracker.api.roster(roomId, 0).catch(() => []),
+    ]);
+
+    let chatData = null;
+    for (const node of Object.values(chatEnv?.denormalized || {})) {
+      if (node?.data?.imq_queue) {
+        chatData = node.data;
+        break;
+      }
+    }
+    const queue = String(chatData?.imq_queue || "");
+    const mount = String(chatData?.imq_messages_mount || "");
+
     const entry = {
       roomId,
-      client,
-      room,
-      chat,
       clients: new Set(),
       recent: [],
       names: new Map(),
-      observer: null,
+      occupants: new Map(),
       subscription: null,
+      refreshTimer: null,
     };
-
-    if (chat?.imqQueue && chat?.imqMessagesMount) {
-      entry.subscription = await client.realtime.listen(
-        chat.imqQueue,
-        chat.imqMessagesMount,
-        (event) => this.onChatMessage(entry, event)
-      );
-
-      try {
-        entry.observer = await chat.observe({ trackChanges: false });
-        for (const participant of entry.observer.participants.values()) {
-          const occupant = this.occupantFromParticipant(participant, client);
-          if (occupant) entry.names.set(occupant.cid, occupant.username);
-        }
-        entry.observer.on("join", (participant) => {
-          const occupant = this.occupantFromParticipant(participant, client);
-          if (!occupant) return;
-          entry.names.set(occupant.cid, occupant.username);
-          this.broadcast(entry, {
-            type: "cinema_occupant_join",
-            roomId,
-            occupant,
-          });
-        });
-        entry.observer.on("leave", (event) => {
-          this.broadcast(entry, {
-            type: "cinema_occupant_leave",
-            roomId,
-            cid: String(event?.userId || ""),
-          });
-        });
-        entry.observer.on("error", () => {
-          /* reconecta pela Collection; nao derruba o cinema */
-        });
-      } catch (error) {
-        this.log.warn(`[cinema] observe(${roomId}) falhou: ${error?.message || error}`);
-      }
+    for (const occupant of this.occupantsFromPeople(people)) {
+      entry.occupants.set(occupant.cid, occupant);
+      entry.names.set(occupant.cid, occupant.username);
     }
 
+    if (queue && mount) {
+      entry.subscription = tracker.imq.observeQueue(queue, mount, (event) =>
+        this.onChatPayload(entry, event)
+      );
+    }
+
+    entry.refreshTimer = setInterval(() => {
+      this.refreshOccupants(entry).catch(() => {});
+    }, OCCUPANT_REFRESH_MS);
+    entry.refreshTimer.unref?.();
+
     this.rooms.set(roomId, entry);
-    this.log.info(`[cinema] observando ${roomId} (${room.name || "?"}) sem entrar`);
+    this.log.info(
+      `[cinema] observando ${roomId} sem entrar (chat: ${Boolean(entry.subscription)}, ${entry.occupants.size} ocupantes)`
+    );
     return entry;
   }
 
@@ -108,11 +123,11 @@ export class CinemaService {
     wsClient.send({
       type: "cinema_ready",
       roomId,
-      chat: Boolean(entry.chat?.imqQueue),
+      chat: Boolean(entry.subscription),
       at: Date.now(),
     });
     for (const message of entry.recent) wsClient.send(message);
-    return { roomId, chat: Boolean(entry.chat?.imqQueue) };
+    return { roomId, chat: Boolean(entry.subscription) };
   }
 
   leave(wsClient, rawRoomId) {
@@ -131,16 +146,14 @@ export class CinemaService {
   }
 
   closeRoom(entry) {
+    if (entry.refreshTimer) clearInterval(entry.refreshTimer);
+    entry.refreshTimer = null;
     try {
       entry.subscription?.close?.();
     } catch {
       /* ignora */
     }
-    try {
-      entry.observer?.close?.();
-    } catch {
-      /* ignora */
-    }
+    entry.subscription = null;
     this.rooms.delete(entry.roomId);
     this.log.info(`[cinema] parou de observar ${entry.roomId}`);
   }
@@ -159,16 +172,36 @@ export class CinemaService {
     }
   }
 
-  onChatMessage(entry, realtimeEvent) {
-    const raw = realtimeEvent?.message;
-    let payload = raw;
-    if (typeof raw === "string") {
-      try {
-        payload = JSON.parse(raw);
-      } catch {
-        return;
+  async refreshOccupants(entry) {
+    if (this.rooms.get(entry.roomId) !== entry) return;
+    const people = await this.tracker.api.roster(entry.roomId, 0).catch(() => null);
+    if (!people?.length) return; // nao remove todos por uma falha transitoria
+    const next = new Map();
+    for (const occupant of this.occupantsFromPeople(people)) {
+      next.set(occupant.cid, occupant);
+      entry.names.set(occupant.cid, occupant.username);
+      if (!entry.occupants.has(occupant.cid)) {
+        this.broadcast(entry, {
+          type: "cinema_occupant_join",
+          roomId: entry.roomId,
+          occupant,
+        });
       }
     }
+    for (const [cid, occupant] of entry.occupants) {
+      if (next.has(cid)) continue;
+      this.broadcast(entry, {
+        type: "cinema_occupant_leave",
+        roomId: entry.roomId,
+        cid,
+      });
+      entry.names.delete(cid);
+    }
+    entry.occupants = next;
+  }
+
+  onChatPayload(entry, event) {
+    const payload = event?.payload;
     if (!payload || typeof payload.message !== "string") return;
     if (Number(payload.to || 0) !== 0) return; // ignora whispers
     let text = payload.message;
@@ -177,8 +210,17 @@ export class CinemaService {
     if (action) text = text.slice(3).trimStart();
     if (!text) return;
 
-    const cid = String(realtimeEvent?.userId || payload.userId || "");
-    const nick = entry.names.get(cid) || this.nickFromParticipant(entry, cid) || cid || "Alguém";
+    const cid = String(event?.userId || payload.userId || "");
+    let nick = entry.names.get(cid);
+    if (!nick) {
+      nick = cid || "Alguém";
+      this.tracker.api
+        .resolveCid(cid)
+        .then((person) => {
+          if (person?.username) entry.names.set(cid, person.username);
+        })
+        .catch(() => {});
+    }
     const horario = new Date().toLocaleTimeString("pt-BR", {
       hour: "2-digit",
       minute: "2-digit",
@@ -197,37 +239,6 @@ export class CinemaService {
     entry.recent.push(message);
     if (entry.recent.length > MAX_RECENT) entry.recent.shift();
     this.broadcast(entry, message);
-  }
-
-  nickFromParticipant(entry, cid) {
-    const participant = entry.observer?.get?.(cid);
-    const user = participant?.user;
-    if (user?.username) {
-      entry.names.set(cid, user.username);
-      return user.username;
-    }
-    return "";
-  }
-
-  occupantFromParticipant(participant, client) {
-    if (!participant) return null;
-    const cid = String(participant.userId || "");
-    if (!cid) return null;
-    if (String(client?.rest?.cid || "") === cid) return null; // bot nunca aparece
-    const user = participant.user || {};
-    return {
-      cid,
-      username: String(user.username || cid),
-      displayName: String(user.displayName || user.username || cid),
-      avatar: user.avatarImage || "",
-      portrait: user.avatarPortraitImage || "",
-      lookImage: participant.lookImage || participant.renderedImage || "",
-      lookThumbnail: participant.lookThumbnail || participant.lookImage || "",
-      seatNumber: participant.seatNumber || 0,
-      isVip: Boolean(user.isVip),
-      isAp: Boolean(user.isAp),
-      online: true,
-    };
   }
 
   stats() {
