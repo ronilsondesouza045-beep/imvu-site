@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 export const API = "https://api.imvu.com";
+export const ASSET_BASE = "https://asset-server-akm.imvu.com";
 export const WS_URL = "wss://wss-imq.imvu.com/streaming/imvu_pre";
 export const UA =
   "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36";
@@ -23,6 +24,52 @@ function normalizeUrl(value) {
   const s = String(value || "");
   if (s.startsWith("//")) return "https:" + s;
   return s;
+}
+
+function absoluteAssetUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("//")) return "https:" + raw;
+  if (raw.startsWith("/")) return ASSET_BASE + raw;
+  return raw;
+}
+
+/** Converte o scene JSON do IMVU em descritores de mesh+materiais. */
+function meshSceneModel(scene) {
+  const objects = Array.isArray(scene?.objects) ? scene.objects : [];
+  const meshGroups = [];
+  for (const object of objects) {
+    for (const group of object?.meshGroups || []) {
+      if (!group?.url) continue;
+      const materials = [];
+      for (const [slot, name] of Object.entries(group.materials || {})) {
+        const def = object.materials?.[name] || {};
+        const stage = def.stages?.[0] || {};
+        const diffuse = stage.diffuse || {};
+        materials.push({
+          slot: intOr(slot, 0),
+          name: String(name || ""),
+          textureUrl: absoluteAssetUrl(diffuse.texture || ""),
+          color: Array.isArray(diffuse.color) ? diffuse.color.slice(0, 3) : [1, 1, 1],
+          twoSided: Boolean(def.twoSided),
+          blending: Boolean(def.enableBlending),
+          alphaTest: def.alphaTest?.enabled ? Number(def.alphaTest.value) || 0 : 0,
+          selfIlluminated: Boolean(def.selfIlluminated),
+        });
+      }
+      meshGroups.push({
+        meshUrl: absoluteAssetUrl(group.url),
+        materials,
+        meshGroup: intOr(group.meshGroup, 0),
+      });
+    }
+  }
+  return {
+    meshGroups,
+    ambientColor: Array.isArray(scene?.ambientColor) ? scene.ambientColor : null,
+    fog: scene?.fog || null,
+  };
 }
 
 function roomIdFromUrl(value) {
@@ -90,6 +137,7 @@ export class ImvuApi {
     this.userNodeCache = new Map();
     this.profileCache = new Map();
     this.room3dCache = new Map();
+    this.assetSceneCache = new Map();
     this.friendCidsCache = { at: 0, cids: new Set() };
     this.roomMetaCache = new Map();
     this.rosterCache = new Map();
@@ -417,11 +465,37 @@ export class ImvuApi {
     return profile;
   }
 
+  /** Baixa e cacheia um scene JSON de asset do IMVU (room/furniture). */
+  async fetchAssetJson(url, ttl = 10 * 60_000) {
+    const key = String(url || "");
+    if (!key) return null;
+    const cached = this.assetSceneCache.get(key);
+    if (cached && now() - cached.at < ttl) return cached.json;
+    const headers = { "User-Agent": this.ua, Accept: "application/json" };
+    if (this.cookies.size) headers.Cookie = this.cookieHeader();
+    try {
+      const response = await fetch(key, {
+        headers,
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) return null;
+      const json = await response.json();
+      this.assetSceneCache.set(key, { at: now(), json });
+      if (this.assetSceneCache.size > 300) {
+        const oldest = this.assetSceneCache.keys().next().value;
+        if (oldest) this.assetSceneCache.delete(oldest);
+      }
+      return json;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Dados experimentais para o Modo Cinema 3D: shell/scene da sala, lista de
-   * moveis com posicao/rotacao/scale, imagens dos produtos, asset CFL e roster.
-   * Os assets reais do IMVU sao CFL (Cal3D); o frontend tenta glTF/OBJ quando
-   * houver modelUrl e cai para caixas texturizadas nos demais casos.
+   * moveis com posicao/rotacao/scale, imagens dos produtos, meshGroups reais
+   * (mesh JSON + texturas) e roster. O frontend monta BufferGeometry com os
+   * meshes reais e usa caixa cinza apenas quando o modelo falha.
    */
   async room3d(roomId, ttl = 60_000) {
     const id = String(roomId || "");
@@ -522,6 +596,27 @@ export class ImvuApi {
     });
     await Promise.all(productWorkers);
 
+    // Cena real do shell (sala) + cenas dos moveis -> meshGroups/texturas.
+    const shellSceneUrl = normalizeUrl(shellData.asset_url || sceneData.room_asset_url || "");
+    const shellScene = shellSceneUrl ? await this.fetchAssetJson(shellSceneUrl).catch(() => null) : null;
+    const shellModel = shellScene ? meshSceneModel(shellScene) : null;
+
+    const assetUrls = [
+      ...new Set(furniture.map((item) => normalizeUrl(item.assetUrl)).filter(Boolean)),
+    ].slice(0, 40);
+    const assetModels = new Map();
+    let assetIndex = 0;
+    const assetWorkers = Array.from({ length: Math.min(5, assetUrls.length || 1) }, async () => {
+      while (true) {
+        const i = assetIndex++;
+        if (i >= assetUrls.length) return;
+        const url = assetUrls[i];
+        const sceneJson = await this.fetchAssetJson(url).catch(() => null);
+        if (sceneJson) assetModels.set(url, meshSceneModel(sceneJson));
+      }
+    });
+    await Promise.all(assetWorkers);
+
     const assets = furniture.map((item) => {
       const product = products.get(item.productId) || {};
       const assetUrl = normalizeUrl(product.asset_url || item.assetUrl || "");
@@ -535,7 +630,8 @@ export class ImvuApi {
         image: normalizeUrl(product.product_image || ""),
         assetUrl,
         modelUrl,
-        type: modelUrl ? (modelUrl.toLowerCase().includes(".obj") ? "obj" : "gltf") : "cfl",
+        model: assetModels.get(normalizeUrl(item.assetUrl)) || null,
+        type: modelUrl ? (modelUrl.toLowerCase().includes(".obj") ? "obj" : "gltf") : "mesh",
         position: [item.x, item.y, item.z],
         rotation: [item.pitch, item.yaw, item.roll],
         scale: item.scale,
@@ -580,18 +676,23 @@ export class ImvuApi {
         productId: String(shellData.product_id || ""),
         name: String(shellData.product_name || ""),
         image: normalizeUrl(shellData.product_image || ""),
-        assetUrl: normalizeUrl(shellData.asset_url || sceneData.room_asset_url || ""),
+        assetUrl: shellSceneUrl,
         sceneUrl: normalizeUrl(shellData.scene_url || ""),
+        model: shellModel,
       },
       scene: {
         roomAssetUrl: normalizeUrl(sceneData.room_asset_url || ""),
         sceneAssetUrl: normalizeUrl(sceneData.scene_asset_url || ""),
         previewImage: normalizeUrl(sceneData.preview_image || ""),
       },
+      environment: {
+        ambientColor: shellModel?.ambientColor || null,
+        fog: shellModel?.fog || null,
+      },
       assets,
       occupants,
       bounds,
-      counts: { furniture: furniture.length, products: products.size },
+      counts: { furniture: furniture.length, products: products.size, models: assetModels.size },
       warning: furniture.length ? "" : "A sala não expôs móveis para o 3D.",
     };
 

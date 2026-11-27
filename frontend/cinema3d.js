@@ -2,13 +2,11 @@
   "use strict";
 
   let ctx = null;
-
   const emptyDebug = () => ({ ready: false });
 
   function disposeMaterial(material) {
     if (!material) return;
-    const maps = [material.map, material.alphaMap, material.emissiveMap, material.normalMap];
-    for (const map of maps) {
+    for (const map of [material.map, material.alphaMap, material.emissiveMap, material.normalMap]) {
       try {
         map?.dispose?.();
       } catch {
@@ -61,6 +59,54 @@
     return texture;
   }
 
+  function buildGeometry(THREE, data) {
+    const positions = data?.positions;
+    if (!Array.isArray(positions) || positions.length < 9) return null;
+    const vertexCount = Math.floor(positions.length / 3);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    if (Array.isArray(data.normals) && data.normals.length === positions.length) {
+      geometry.setAttribute("normal", new THREE.Float32BufferAttribute(data.normals, 3));
+    } else {
+      geometry.computeVertexNormals();
+    }
+    if (Array.isArray(data.tex0) && data.tex0.length >= vertexCount * 2) {
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(data.tex0.slice(0, vertexCount * 2), 2));
+    }
+    if (Array.isArray(data.indices) && data.indices.length) {
+      geometry.setIndex(new THREE.Uint32BufferAttribute(data.indices, 1));
+    }
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  function materialFromDef(THREE, def, texture, forceDoubleSide) {
+    const twoSided = Boolean(forceDoubleSide || def?.twoSided);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.82,
+      metalness: 0.04,
+      side: twoSided ? THREE.DoubleSide : THREE.FrontSide,
+      transparent: Boolean(def?.blending),
+      alphaTest: Number(def?.alphaTest) || 0,
+    });
+    if (texture) {
+      material.map = texture;
+    } else if (Array.isArray(def?.color)) {
+      material.color.setRGB(
+        Number(def.color[0]) || 0,
+        Number(def.color[1]) || 0,
+        Number(def.color[2]) || 0
+      );
+    } else {
+      material.color.set(0x6b7280);
+    }
+    if (def?.selfIlluminated) {
+      material.emissive = new THREE.Color(0x2a2a2a);
+    }
+    return material;
+  }
+
   function start(container, room, options = {}) {
     stop();
     if (!container) return;
@@ -72,10 +118,14 @@
 
     try {
       const imageUrl = typeof options.imageUrl === "function" ? options.imageUrl : (url) => url;
+      const assetUrl =
+        typeof options.assetUrl === "function" ? options.assetUrl : (url) => url;
+      const life = { cancelled: false };
       let pending = 0;
       let finished = false;
+      let meshCount = 0;
       const finish = () => {
-        if (finished) return;
+        if (finished || life.cancelled) return;
         finished = true;
         options.onReady?.();
       };
@@ -83,10 +133,11 @@
         pending += 1;
       };
       const done = () => {
+        if (life.cancelled) return;
         pending = Math.max(0, pending - 1);
         if (pending === 0) finish();
       };
-      const timer = setTimeout(finish, 20_000);
+      const timer = setTimeout(finish, 90_000);
 
       const holder = document.createElement("div");
       holder.className = "cinema-3d-canvas";
@@ -97,7 +148,16 @@
 
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x05070c);
-      scene.fog = new THREE.Fog(0x05070c, 70, 170);
+      const env = room.environment || {};
+      if (env.fog && Array.isArray(env.fog.color)) {
+        scene.fog = new THREE.Fog(
+          new THREE.Color(env.fog.color[0], env.fog.color[1], env.fog.color[2]),
+          Number(env.fog.near) || 1,
+          Number(env.fog.far) || 70
+        );
+      } else {
+        scene.fog = new THREE.Fog(0x05070c, 70, 170);
+      }
 
       const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 500);
       const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -116,12 +176,15 @@
       camera.position.set(centerX, 15, Number(bounds.maxZ) + 22);
       camera.lookAt(centerX, 2, centerZ);
 
-      const hemisphere = new THREE.HemisphereLight(0xa7c0ff, 0x080812, 0.95);
+      const ambient = Array.isArray(env.ambientColor)
+        ? new THREE.Color(env.ambientColor[0], env.ambientColor[1], env.ambientColor[2])
+        : new THREE.Color(0x8899ff);
+      const hemisphere = new THREE.HemisphereLight(ambient, 0x080812, 1.05);
       scene.add(hemisphere);
-      const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+      const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
       keyLight.position.set(12, 24, 12);
       scene.add(keyLight);
-      const purple = new THREE.PointLight(0x7c5cff, 0.8, 80);
+      const purple = new THREE.PointLight(0x7c5cff, 0.7, 90);
       purple.position.set(centerX - 8, 8, centerZ - 6);
       scene.add(purple);
 
@@ -133,12 +196,7 @@
       floor.position.set(centerX, 0, centerZ);
       scene.add(floor);
 
-      const grid = new THREE.GridHelper(
-        Math.max(roomWidth, roomDepth),
-        26,
-        0x4c3a8a,
-        0x1a1f35
-      );
+      const grid = new THREE.GridHelper(Math.max(roomWidth, roomDepth), 26, 0x4c3a8a, 0x1a1f35);
       grid.position.set(centerX, 0.02, centerZ);
       scene.add(grid);
 
@@ -165,10 +223,124 @@
         );
       }
 
+      const hidePlaceholders = () => {
+        floor.visible = false;
+        grid.visible = false;
+        backdrop.visible = false;
+      };
+
+      // Fila de meshes (evita 60 downloads simultaneos de JSON grande).
+      let activeMeshes = 0;
+      const meshQueue = [];
+      const pumpMeshes = () => {
+        while (activeMeshes < 4 && meshQueue.length) {
+          const job = meshQueue.shift();
+          activeMeshes += 1;
+          Promise.resolve()
+            .then(job)
+            .catch(() => {})
+            .finally(() => {
+              activeMeshes -= 1;
+              pumpMeshes();
+            });
+        }
+      };
+      const enqueueMesh = (job) => {
+        if (life.cancelled) return;
+        meshQueue.push(job);
+        pumpMeshes();
+      };
+
+      const loadTexture = (url, callback) => {
+        if (!url) {
+          callback(null);
+          return;
+        }
+        task();
+        new THREE.TextureLoader().load(
+          assetUrl(url),
+          (texture) => {
+            texture.encoding = THREE.sRGBEncoding;
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            callback(texture);
+            done();
+          },
+          undefined,
+          () => {
+            callback(null);
+            done();
+          }
+        );
+      };
+
+      const loadMeshGroups = (groups, parent, { forceDoubleSide = false, onLoaded = null } = {}) => {
+        const list = Array.isArray(groups) ? groups : [];
+        if (!list.length) return false;
+        let loadedAny = false;
+        for (const group of list) {
+          if (!group?.meshUrl) continue;
+          task();
+          enqueueMesh(async () => {
+            if (life.cancelled) {
+              done();
+              return;
+            }
+            try {
+              const response = await fetch(assetUrl(group.meshUrl), { cache: "force-cache" });
+              if (!response.ok) throw new Error("mesh");
+              const json = await response.json();
+              if (life.cancelled) return;
+              const meshes = Array.isArray(json?.meshes) ? json.meshes : [];
+              for (const data of meshes) {
+                const geometry = buildGeometry(THREE, data);
+                if (!geometry) continue;
+                const slot = Number(data.materialSlot) || 0;
+                const def =
+                  (group.materials || []).find((material) => Number(material.slot) === slot) ||
+                  (group.materials || [])[slot] ||
+                  null;
+                const addMesh = (texture) => {
+                  if (life.cancelled) return;
+                  const material = materialFromDef(THREE, def, texture, forceDoubleSide);
+                  const mesh = new THREE.Mesh(geometry, material);
+                  parent.add(mesh);
+                  meshCount += 1;
+                };
+                if (def?.textureUrl) loadTexture(def.textureUrl, addMesh);
+                else addMesh(null);
+              }
+              if (!loadedAny) {
+                loadedAny = true;
+                onLoaded?.();
+              }
+            } catch {
+              /* placeholder permanece */
+            } finally {
+              done();
+            }
+          });
+        }
+        return true;
+      };
+
+      // Sala real (shell): esconde o fundo placeholder quando o mesh chega.
+      const shellGroups = room.shell?.model?.meshGroups || [];
+      if (shellGroups.length) {
+        const shellGroup = new THREE.Group();
+        shellGroup.name = "imvu-shell";
+        scene.add(shellGroup);
+        loadMeshGroups(shellGroups, shellGroup, {
+          forceDoubleSide: true,
+          onLoaded: hidePlaceholders,
+        });
+      }
+
+      // Moveis reais + caixas como placeholder ate o mesh carregar.
       const assets = Array.isArray(room.assets) ? room.assets : [];
       for (const asset of assets) {
-        const scale = Math.max(0.4, Number(asset.scale) || 1);
-        const geometry = new THREE.BoxGeometry(1.8 * scale, 1.6 * scale, 1.8 * scale);
+        const scale = Math.max(0.1, Number(asset.scale) || 1);
+        const geometry = new THREE.BoxGeometry(1.8, 1.6, 1.8);
         const material = new THREE.MeshStandardMaterial({
           color: 0x6b7280,
           roughness: 0.8,
@@ -180,6 +352,7 @@
         box.position.set(Number(x) || 0, (Number(y) || 0) + 0.8 * scale, Number(z) || 0);
         box.rotation.order = "YXZ";
         box.rotation.set(Number(pitch) || 0, Number(yaw) || 0, Number(roll) || 0);
+        box.scale.setScalar(scale);
         box.userData = { name: String(asset.name || "Móvel"), asset };
         scene.add(box);
 
@@ -189,6 +362,7 @@
         );
         edges.position.copy(box.position);
         edges.rotation.copy(box.rotation);
+        edges.scale.copy(box.scale);
         scene.add(edges);
 
         if (asset.image) {
@@ -207,27 +381,48 @@
           );
         }
 
-        if (asset.modelUrl) {
+        const removePlaceholder = () => {
+          scene.remove(box);
+          scene.remove(edges);
+        };
+
+        if (asset.model?.meshGroups?.length) {
+          const modelGroup = new THREE.Group();
+          modelGroup.position.set(Number(x) || 0, Number(y) || 0, Number(z) || 0);
+          modelGroup.rotation.order = "YXZ";
+          modelGroup.rotation.set(Number(pitch) || 0, Number(yaw) || 0, Number(roll) || 0);
+          modelGroup.scale.setScalar(scale);
+          scene.add(modelGroup);
+          loadMeshGroups(asset.model.meshGroups, modelGroup, {
+            onLoaded: removePlaceholder,
+          });
+        } else if (asset.modelUrl) {
+          // Assets externos (glTF/OBJ) quando existirem.
+          const externalGroup = new THREE.Group();
+          externalGroup.position.set(Number(x) || 0, Number(y) || 0, Number(z) || 0);
+          externalGroup.rotation.order = "YXZ";
+          externalGroup.rotation.set(Number(pitch) || 0, Number(yaw) || 0, Number(roll) || 0);
+          externalGroup.scale.setScalar(scale);
+          scene.add(externalGroup);
           task();
-          const onModel = (object) => {
-            object.position.copy(box.position);
-            object.rotation.copy(box.rotation);
-            object.scale.multiplyScalar(scale);
-            scene.add(object);
-            scene.remove(box);
-            scene.remove(edges);
+          const finishModel = (object) => {
+            if (life.cancelled) {
+              done();
+              return;
+            }
+            externalGroup.add(object);
+            removePlaceholder();
             done();
           };
-          const onModelError = () => done();
           try {
             if (asset.type === "obj" && THREE.OBJLoader) {
-              new THREE.OBJLoader().load(asset.modelUrl, onModel, undefined, onModelError);
+              new THREE.OBJLoader().load(asset.modelUrl, finishModel, undefined, done);
             } else if (THREE.GLTFLoader) {
               new THREE.GLTFLoader().load(
                 asset.modelUrl,
-                (gltf) => onModel(gltf.scene),
+                (gltf) => finishModel(gltf.scene),
                 undefined,
-                onModelError
+                done
               );
             } else {
               done();
@@ -244,18 +439,22 @@
         const px = centerX + (index - (occupants.length - 1) / 2) * 3.6;
         const addSprite = (texture) => {
           if (texture) texture.encoding = THREE.sRGBEncoding;
-          const material = new THREE.SpriteMaterial({
+          const spriteMaterial = new THREE.SpriteMaterial({
             map: texture || makeInitialsTexture(THREE, occupant),
             transparent: true,
             depthWrite: false,
           });
-          const sprite = new THREE.Sprite(material);
+          const sprite = new THREE.Sprite(spriteMaterial);
           sprite.position.set(px, 2.3, avatarZ);
           sprite.scale.set(3.2, 4.2, 1);
-          sprite.userData = { name: String(occupant.displayName || occupant.username || "Avatar"), occupant };
+          sprite.userData = {
+            name: String(occupant.displayName || occupant.username || "Avatar"),
+            occupant,
+          };
           scene.add(sprite);
         };
-        const src = occupant.lookImage || occupant.lookThumbnail || occupant.avatar || occupant.portrait || "";
+        const src =
+          occupant.lookImage || occupant.lookThumbnail || occupant.avatar || occupant.portrait || "";
         if (src) {
           task();
           new THREE.TextureLoader().load(
@@ -313,8 +512,10 @@
         resize,
         resizeObserver,
         timer,
+        life,
         assets: assets.length,
         avatars: occupants.length,
+        getMeshCount: () => meshCount,
         getAnimationId: () => animationId,
       };
 
@@ -322,6 +523,7 @@
         ready: true,
         assets: ctx?.assets || 0,
         avatars: ctx?.avatars || 0,
+        meshes: ctx?.getMeshCount?.() || 0,
         objects: ctx?.scene?.children?.length || 0,
         size: [ctx?.renderer?.domElement?.width || 0, ctx?.renderer?.domElement?.height || 0],
       });
@@ -344,6 +546,7 @@
     }
     const current = ctx;
     ctx = null;
+    if (current.life) current.life.cancelled = true;
     try {
       cancelAnimationFrame(current.getAnimationId());
     } catch {

@@ -1272,6 +1272,7 @@
       }
       window.Cinema3D.start(els.cinema3dWrap, data, {
         imageUrl: proxiedImage,
+        assetUrl: (url) => `${HTTP_BASE}/api/sala-3d/asset?url=${encodeURIComponent(url)}`,
         onReady: () => {
           if (!cinema.open || requestId !== cinema.requestId) return;
           els.cinema3dLoading?.classList.add("hidden");

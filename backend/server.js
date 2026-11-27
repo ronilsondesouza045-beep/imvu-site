@@ -356,6 +356,52 @@ app.get("/api/sala-2d/:roomId", async (req, res) => {
   }
 });
 
+// Proxy dos assets 3D do IMVU (mesh JSON, texturas) com a sessao do bot.
+app.get("/api/sala-3d/asset", async (req, res) => {
+  const raw = String(req.query.url || "");
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    res.status(400).json({ error: "url invalida" });
+    return;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (
+    parsed.protocol !== "https:" ||
+    (host !== "imvu.com" && !host.endsWith(".imvu.com")) ||
+    !parsed.pathname.startsWith("/asset/")
+  ) {
+    res.status(400).json({ error: "asset nao permitido" });
+    return;
+  }
+  const logged = await tracker.ensureLogin();
+  if (!logged) {
+    res.status(503).json({ error: tracker.api.lastError || "login falhou" });
+    return;
+  }
+  try {
+    const headers = { "User-Agent": "Mozilla/5.0", Accept: "*/*" };
+    const cookie = tracker.api.cookieHeader();
+    if (cookie) headers.Cookie = cookie;
+    const upstream = await fetch(parsed.toString(), {
+      headers,
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (!upstream.ok) {
+      res.status(upstream.status).json({ error: `asset upstream ${upstream.status}` });
+      return;
+    }
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/octet-stream");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(buffer);
+  } catch (error) {
+    res.status(502).json({ error: error?.message || "falha no asset" });
+  }
+});
+
 // Modo Cinema 3D (experimental): shell/scene, moveis e texturas.
 app.get("/api/sala-3d/:roomId", async (req, res) => {
   const roomId = String(req.params.roomId || "").trim();
