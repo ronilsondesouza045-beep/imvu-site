@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   "use strict";
 
   const $ = (selector) => document.querySelector(selector);
@@ -398,17 +398,17 @@
       let text = "Alertas desativados";
       if (alerts.busy) {
         kind = "is-warn";
-        text = "Ativando alertas... aguarde até 30s";
+        text = "Ativando alertas... aguarde atÃ© 30s";
       } else if (alerts.permission === "denied") {
         kind = "is-error";
-        text = "Permissão de notificação negada";
+        text = "PermissÃ£o de notificaÃ§Ã£o negada";
       } else if (typeof Notification === "undefined") {
         kind = "is-warn";
-        text = "Navegador sem suporte a notificações";
+        text = "Navegador sem suporte a notificaÃ§Ãµes";
       } else if (alerts.enabled) {
         kind = "is-active";
-        const expiry = alerts.expiresAt ? ` até ${timeOf(alerts.expiresAt)}` : "";
-        text = `Alertas ativos${expiry} · ${alerts.mode === "push" ? "push" : "aba aberta"}`;
+        const expiry = alerts.expiresAt ? ` atÃ© ${timeOf(alerts.expiresAt)}` : "";
+        text = `Alertas ativos${expiry} Â· ${alerts.mode === "push" ? "push" : "aba aberta"}`;
       }
       if (kind) els.alertsStatus.classList.add(kind);
       if (els.alertsStatusText) els.alertsStatusText.textContent = text;
@@ -424,7 +424,7 @@
     if (els.alertsInfo) {
       let info = "";
       if (alerts.busy) {
-        info = "Preparando a assinatura push. Pode levar até 30s...";
+        info = "Preparando a assinatura push. Pode levar atÃ© 30s...";
       } else if (alerts.enabled) {
         const monitored = alerts.nick || state.currentNick || "nick";
         info =
@@ -436,7 +436,7 @@
       } else if (alerts.pushEnabled) {
         info = `Pronto para ativar alertas para @${state.currentNick}.`;
       } else {
-        info = "Push indisponível neste navegador; os alertas funcionam com a aba aberta.";
+        info = "Push indisponÃ­vel neste navegador; os alertas funcionam com a aba aberta.";
       }
       els.alertsInfo.textContent = info;
     }
@@ -551,8 +551,8 @@
     try {
       await registration.showNotification(title, {
         body,
-        icon: "/icons/icon-192.png",
-        badge: "/icons/icon-192.png",
+        icon: new URL("icons/icon-192.png", document.baseURI).href,
+        badge: new URL("icons/icon-192.png", document.baseURI).href,
         tag: `radar-local-${Date.now()}`,
         data: { url: window.location.href },
       });
@@ -604,7 +604,7 @@
       if (alerts.boundToBackend) return;
       alerts.busy = false;
       alertsRender();
-      toast("O servidor não confirmou os alertas", {
+      toast("O servidor nÃ£o confirmou os alertas", {
         kind: "warn",
         detail: "Tente ativar novamente.",
       });
@@ -627,7 +627,7 @@
       return;
     }
     if (typeof Notification === "undefined" || typeof Notification.requestPermission !== "function") {
-      toast("Este navegador não suporta notificações", { kind: "danger" });
+      toast("Este navegador nÃ£o suporta notificaÃ§Ãµes", { kind: "danger" });
       return;
     }
 
@@ -637,15 +637,15 @@
       const permission = await Notification.requestPermission();
       alerts.permission = permission;
       if (permission !== "granted") {
-        toast("Permissão de notificação negada", {
+        toast("PermissÃ£o de notificaÃ§Ã£o negada", {
           kind: "warn",
-          detail: "Libere as notificações nas configurações do navegador.",
+          detail: "Libere as notificaÃ§Ãµes nas configuraÃ§Ãµes do navegador.",
         });
         return;
       }
 
       const registration = await registerServiceWorker();
-      if (!registration) throw new Error("service worker indisponível");
+      if (!registration) throw new Error("service worker indisponÃ­vel");
 
       const pushReady = await fetchPushConfig();
       let subscription = null;
@@ -673,10 +673,10 @@
         alerts.boundToBackend = false;
         alertsSaveSettings();
         const sent = await sendAlertStart(state.currentNick);
-        if (!sent) throw new Error("sem conexão com o servidor");
+        if (!sent) throw new Error("sem conexÃ£o com o servidor");
         await showLocalNotification(
           "Ativando alertas",
-          `Avisos de ${state.currentNick} serão enviados pelo navegador.`
+          `Avisos de ${state.currentNick} serÃ£o enviados pelo navegador.`
         );
         alertLogAdd(`Ativando alertas para @${state.currentNick}`);
       } else {
@@ -694,7 +694,7 @@
         toast("Alertas locais ativados", {
           kind: "success",
           detail: pushError
-            ? "Push indisponível agora; mantenha a aba aberta."
+            ? "Push indisponÃ­vel agora; mantenha a aba aberta."
             : "Mantenha a aba aberta (pode minimizar).",
         });
       }
@@ -751,27 +751,27 @@
   async function testAlerts() {
     if (alerts.busy) return;
     if (typeof Notification === "undefined") {
-      toast("Este navegador não suporta notificações", { kind: "danger" });
+      toast("Este navegador nÃ£o suporta notificaÃ§Ãµes", { kind: "danger" });
       return;
     }
     let permission = Notification.permission;
     if (permission !== "granted") permission = await Notification.requestPermission();
     alerts.permission = permission;
     if (permission !== "granted") {
-      toast("Permissão de notificação negada", { kind: "warn" });
+      toast("PermissÃ£o de notificaÃ§Ã£o negada", { kind: "warn" });
       alertsRender();
       return;
     }
     const registration = await registerServiceWorker();
     if (!registration) {
-      toast("Service worker indisponível", { kind: "danger" });
+      toast("Service worker indisponÃ­vel", { kind: "danger" });
       return;
     }
-    await showLocalNotification("Teste de alerta", "Se você está vendo isso, as notificações estão funcionando.");
+    await showLocalNotification("Teste de alerta", "Se vocÃª estÃ¡ vendo isso, as notificaÃ§Ãµes estÃ£o funcionando.");
     if (alerts.enabled && alerts.mode === "push" && alerts.subscription?.endpoint) {
       wsSend({ type: "alert_test", endpoint: alerts.subscription.endpoint });
     }
-    toast("Teste enviado", { kind: "success", detail: "Veja a notificação do navegador." });
+    toast("Teste enviado", { kind: "success", detail: "Veja a notificaÃ§Ã£o do navegador." });
   }
 
   async function initAlerts() {
@@ -831,14 +831,14 @@
 
   const formatProfileNumber = (value) => {
     const number = Number(value);
-    if (!Number.isFinite(number) || number < 0) return "—";
+    if (!Number.isFinite(number) || number < 0) return "â€”";
     return number.toLocaleString("pt-BR");
   };
 
   const formatProfileDate = (value) => {
-    if (!value) return "—";
+    if (!value) return "â€”";
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "—";
+    if (Number.isNaN(date.getTime())) return "â€”";
     return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
   };
 
@@ -874,15 +874,15 @@
     els.profileError?.classList.add("hidden");
 
     if (els.profileModalName) els.profileModalName.textContent = profile.displayName || profile.username || profile.cid;
-    if (els.profileUsername) els.profileUsername.textContent = `@${profile.username || profile.cid || "—"}`;
-    if (els.profileCid) els.profileCid.textContent = `cid ${profile.cid || "—"}`;
+    if (els.profileUsername) els.profileUsername.textContent = `@${profile.username || profile.cid || "â€”"}`;
+    if (els.profileCid) els.profileCid.textContent = `cid ${profile.cid || "â€”"}`;
     renderProfileBadges(profile);
     renderProfileAvatar(profile);
 
     if (els.profileFollowers) els.profileFollowers.textContent = formatProfileNumber(profile.followers);
     if (els.profileFollowing) els.profileFollowing.textContent = formatProfileNumber(profile.following);
     if (els.profileJoined) els.profileJoined.textContent = formatProfileDate(profile.joinedAt);
-    if (els.profileAge) els.profileAge.textContent = profile.age ? `${profile.age} anos` : "—";
+    if (els.profileAge) els.profileAge.textContent = profile.age ? `${profile.age} anos` : "â€”";
 
     if (els.profileStatusBox && els.profileStatus) {
       const status = String(profile.status || "").trim();
@@ -953,10 +953,10 @@
     renderProfileBadges(person);
     renderProfileAvatar(person);
 
-    if (els.profileFollowers) els.profileFollowers.textContent = "—";
-    if (els.profileFollowing) els.profileFollowing.textContent = "—";
-    if (els.profileJoined) els.profileJoined.textContent = "—";
-    if (els.profileAge) els.profileAge.textContent = "—";
+    if (els.profileFollowers) els.profileFollowers.textContent = "â€”";
+    if (els.profileFollowing) els.profileFollowing.textContent = "â€”";
+    if (els.profileJoined) els.profileJoined.textContent = "â€”";
+    if (els.profileAge) els.profileAge.textContent = "â€”";
     els.profileInfo?.classList.add("hidden");
     els.profileError?.classList.add("hidden");
     if (els.profileError) els.profileError.textContent = "";
@@ -989,7 +989,7 @@
       .then(async (response) => {
         const json = await response.json().catch(() => ({}));
         if (!response.ok || !json?.ok || !json.profile) {
-          throw new Error(json?.error || "Perfil indisponível no momento.");
+          throw new Error(json?.error || "Perfil indisponÃ­vel no momento.");
         }
         profileModal.cache.set(cid, { at: Date.now(), profile: json.profile });
         renderProfile(json.profile, requestId);
@@ -1001,7 +1001,7 @@
           els.profileError.textContent =
             error?.name === "AbortError"
               ? "O IMVU demorou para responder. Tente novamente."
-              : error?.message || "Não foi possível carregar o perfil.";
+              : error?.message || "NÃ£o foi possÃ­vel carregar o perfil.";
           els.profileError.classList.remove("hidden");
         }
       })
@@ -1056,7 +1056,7 @@
     time.textContent = message.horario || timeOf(message.at);
     const nick = document.createElement("span");
     nick.className = "cinema-msg-nick";
-    nick.textContent = message.nick || "Alguém";
+    nick.textContent = message.nick || "AlguÃ©m";
     const text = document.createElement("span");
     text.className = "cinema-msg-text";
     text.textContent = message.mensagem || "";
@@ -1177,21 +1177,21 @@
 
     if (els.cinemaTitle) els.cinemaTitle.textContent = roomDisplayName(room);
     if (els.cinemaMeta) {
-      els.cinemaMeta.textContent = `#${room.roomId} · ${
-        roomTypeOf(room) === "PRIVATE" ? "privada" : "pública"
-      } · ${(room.occupants || []).length || room.total || 0} na sala`;
+      els.cinemaMeta.textContent = `#${room.roomId} Â· ${
+        roomTypeOf(room) === "PRIVATE" ? "privada" : "pÃºblica"
+      } Â· ${(room.occupants || []).length || room.total || 0} na sala`;
     }
     setCinemaStatus(is3d ? "carregando 3D..." : "conectando...", "");
     if (els.cinemaChatCount) els.cinemaChatCount.textContent = "0";
-    resetCinemaMessages(is3d ? "Carregando sala 3D..." : "Iniciando observador invisível...");
+    resetCinemaMessages(is3d ? "Carregando sala 3D..." : "Iniciando observador invisÃ­vel...");
     if (els.cinemaChatHint) els.cinemaChatHint.textContent = "O bot observa sem entrar na sala.";
 
     els.cinemaStage?.classList.toggle("hidden", is3d);
     els.cinema3dWrap?.classList.toggle("hidden", !is3d);
     if (els.cinemaHint) {
       els.cinemaHint.textContent = is3d
-        ? "Arraste para orbitar · roda para zoom"
-        : "Arraste para mover · roda/pinça para zoom";
+        ? "Arraste para orbitar Â· roda para zoom"
+        : "Arraste para mover Â· roda/pinÃ§a para zoom";
     }
 
     if (is3d) {
@@ -1223,26 +1223,26 @@
         .then(async (response) => {
           const json = await response.json().catch(() => ({}));
           if (!response.ok || !json?.ok || !json.room) {
-            throw new Error(json?.error || "Sala indisponível no momento.");
+            throw new Error(json?.error || "Sala indisponÃ­vel no momento.");
           }
           if (!cinema.open || requestId !== cinema.requestId) return;
           const data = json.room;
           cinema.room = data;
           if (els.cinemaTitle) els.cinemaTitle.textContent = data.name || roomDisplayName(room);
           if (els.cinemaMeta) {
-            els.cinemaMeta.textContent = `#${data.roomId} · ${data.privacyLabel || "—"} · ${data.occupancy || 0} na sala`;
+            els.cinemaMeta.textContent = `#${data.roomId} Â· ${data.privacyLabel || "â€”"} Â· ${data.occupancy || 0} na sala`;
           }
           setCinemaRoomImage(data.image || data.thumbnail || "");
           renderCinemaOccupants(data.occupants || []);
           if (!data.chat) {
-            setCinemaStatus("sem chat clássico", "warn");
-            if (els.cinemaChatHint) els.cinemaChatHint.textContent = "Esta sala não tem chat clássico.";
+            setCinemaStatus("sem chat clÃ¡ssico", "warn");
+            if (els.cinemaChatHint) els.cinemaChatHint.textContent = "Esta sala nÃ£o tem chat clÃ¡ssico.";
           }
         })
         .catch((error) => {
           if (!cinema.open || requestId !== cinema.requestId) return;
-          setCinemaStatus("imagem indisponível", "warn");
-          if (els.cinemaChatHint) els.cinemaChatHint.textContent = error?.message || "Não foi possível carregar a sala 2D.";
+          setCinemaStatus("imagem indisponÃ­vel", "warn");
+          if (els.cinemaChatHint) els.cinemaChatHint.textContent = error?.message || "NÃ£o foi possÃ­vel carregar a sala 2D.";
         });
     }
 
@@ -1258,17 +1258,17 @@
       });
       const json = await response.json().catch(() => ({}));
       if (!response.ok || !json?.ok || !json.room) {
-        throw new Error(json?.error || "Sala 3D indisponível no momento.");
+        throw new Error(json?.error || "Sala 3D indisponÃ­vel no momento.");
       }
       if (!cinema.open || requestId !== cinema.requestId || cinema.mode !== "3d") return;
       const data = json.room;
       cinema.room3d = data;
       if (els.cinemaTitle) els.cinemaTitle.textContent = data.name || roomDisplayName(room);
       if (els.cinemaMeta) {
-        els.cinemaMeta.textContent = `#${data.roomId} · 3D experimental · ${data.assets?.length || 0} objetos · ${data.occupants?.length || 0} avatares`;
+        els.cinemaMeta.textContent = `#${data.roomId} Â· 3D experimental Â· ${data.assets?.length || 0} objetos Â· ${data.occupants?.length || 0} avatares`;
       }
       if (!window.Cinema3D || typeof window.THREE === "undefined") {
-        throw new Error("Three.js não carregou. Verifique sua conexão.");
+        throw new Error("Three.js nÃ£o carregou. Verifique sua conexÃ£o.");
       }
       window.Cinema3D.start(els.cinema3dWrap, data, {
         imageUrl: proxiedImage,
@@ -1286,7 +1286,7 @@
               els.cinema3dLoadingText.textContent = message || "Falha ao carregar o 3D.";
             }
           }
-          setCinemaStatus("3D indisponível", "warn");
+          setCinemaStatus("3D indisponÃ­vel", "warn");
         },
       });
     } catch (error) {
@@ -1294,10 +1294,10 @@
       if (els.cinema3dLoading) {
         els.cinema3dLoading.classList.remove("hidden");
         if (els.cinema3dLoadingText) {
-          els.cinema3dLoadingText.textContent = error?.message || "Não foi possível carregar a sala 3D.";
+          els.cinema3dLoadingText.textContent = error?.message || "NÃ£o foi possÃ­vel carregar a sala 3D.";
         }
       }
-      setCinemaStatus("3D indisponível", "warn");
+      setCinemaStatus("3D indisponÃ­vel", "warn");
     }
   }
 
@@ -1316,7 +1316,7 @@
     els.cinema3dWrap?.classList.add("hidden");
     els.cinema3dLoading?.classList.add("hidden");
     els.cinemaStage?.classList.remove("hidden");
-    if (els.cinemaHint) els.cinemaHint.textContent = "Arraste para mover · roda/pinça para zoom";
+    if (els.cinemaHint) els.cinemaHint.textContent = "Arraste para mover Â· roda/pinÃ§a para zoom";
     wsSend({ type: "cinema_leave", roomId });
     els.cinemaModal?.classList.remove("is-open");
     els.cinemaOverlay?.classList.remove("is-open");
@@ -1387,7 +1387,7 @@
         if (previousRoomId && primary?.roomId && previousRoomId !== primary.roomId) {
           toast("Mudou de sala", {
             kind: "info",
-            detail: `${roomDisplayName(state.room)} → ${roomDisplayName(primary)}`,
+            detail: `${roomDisplayName(state.room)} â†’ ${roomDisplayName(primary)}`,
           });
         }
         state.rooms = rooms;
@@ -1409,7 +1409,7 @@
           alertLogAdd(`Sala: ${roomLabel}`);
           maybeLocalNotify(
             "IMVU Radar",
-            `${state.target?.displayName || state.target?.username || "Alvo"} • ${roomLabel}`
+            `${state.target?.displayName || state.target?.username || "Alvo"} â€¢ ${roomLabel}`
           );
         }
         break;
@@ -1417,7 +1417,7 @@
 
       case "location_hidden":
         state.locationHidden = true;
-        state.locationHiddenTitle = message.title || "Localização Indisponível";
+        state.locationHiddenTitle = message.title || "LocalizaÃ§Ã£o IndisponÃ­vel";
         state.locationHiddenText = message.message || "";
         state.room = null;
         state.rooms = [];
@@ -1426,7 +1426,7 @@
         renderTarget();
         renderRoom();
         renderOccupants();
-        setStatus("hidden", "Indisponível");
+        setStatus("hidden", "IndisponÃ­vel");
         break;
 
       case "offline":
@@ -1454,7 +1454,7 @@
         state.occupants = state.room?.occupants || [];
         renderRoom();
         renderOccupants();
-        if (!state.rooms.length) setStatus("offline", "Fora de sala — monitorando...");
+        if (!state.rooms.length) setStatus("offline", "Fora de sala â€” monitorando...");
         toast(`${message.nick || state.target?.username || "O alvo"} saiu da sala`, {
           kind: "warn",
           detail: roomName,
@@ -1483,10 +1483,10 @@
           renderRoom();
           renderOccupants();
         }
-        const name = person?.displayName || person?.username || message.nick || "Alguém";
+        const name = person?.displayName || person?.username || message.nick || "AlguÃ©m";
         toast(`${name} entrou na sala`, {
           kind: "success",
-          detail: person?.username ? `@${person.username} · ${timeOf(message.at)}` : timeOf(message.at),
+          detail: person?.username ? `@${person.username} Â· ${timeOf(message.at)}` : timeOf(message.at),
         });
         alertLogAdd(`${name} entrou na sala`);
         maybeLocalNotify("IMVU Radar", `${name} entrou na sala`);
@@ -1513,10 +1513,10 @@
           message.occupant?.username ||
           message.nickOut ||
           message.nick ||
-          "Alguém";
+          "AlguÃ©m";
         toast(`${name} saiu da sala`, {
           kind: "danger",
-          detail: message.occupant?.username ? `@${message.occupant.username} · ${timeOf(message.at)}` : timeOf(message.at),
+          detail: message.occupant?.username ? `@${message.occupant.username} Â· ${timeOf(message.at)}` : timeOf(message.at),
         });
         alertLogAdd(`${name} saiu da sala`);
         maybeLocalNotify("IMVU Radar", `${name} saiu da sala`);
@@ -1525,18 +1525,18 @@
 
       case "cinema_ready":
         if (cinema.open && message.roomId === cinema.roomId) {
-          setCinemaStatus(message.chat ? "chat ao vivo" : "sem chat clássico", message.chat ? "" : "warn");
+          setCinemaStatus(message.chat ? "chat ao vivo" : "sem chat clÃ¡ssico", message.chat ? "" : "warn");
           if (els.cinemaChatHint) {
             els.cinemaChatHint.textContent = message.chat
               ? "O bot observa sem entrar na sala."
-              : "Esta sala não tem chat clássico.";
+              : "Esta sala nÃ£o tem chat clÃ¡ssico.";
           }
           if (els.cinemaMessages) {
             const empty = els.cinemaMessages.querySelector(".cinema-chat-empty");
             if (empty) {
               empty.textContent = message.chat
                 ? "Nenhuma mensagem ainda. O chat aparece aqui em tempo real."
-                : "Esta sala não tem chat clássico.";
+                : "Esta sala nÃ£o tem chat clÃ¡ssico.";
             }
           }
         }
@@ -1544,7 +1544,7 @@
 
       case "cinema_error":
         if (cinema.open && message.roomId === cinema.roomId) {
-          setCinemaStatus("chat indisponível", "error");
+          setCinemaStatus("chat indisponÃ­vel", "error");
           if (els.cinemaChatHint) els.cinemaChatHint.textContent = message.message || "Falha ao observar o chat.";
           appendCinemaChat({
             nick: "Radar",
@@ -1604,7 +1604,7 @@
         alertsRender();
         toast("Alertas ativados", {
           kind: "success",
-          detail: alerts.expiresAt ? `Até ${timeOf(alerts.expiresAt)}` : "",
+          detail: alerts.expiresAt ? `AtÃ© ${timeOf(alerts.expiresAt)}` : "",
         });
         alertLogAdd(`Alertas ativos para @${alerts.nick}`);
         break;
@@ -1716,9 +1716,9 @@
       while (avatar.firstChild) els.targetAvatar.appendChild(avatar.firstChild);
       els.targetAvatar.dataset.cid = String(target.cid || "");
     }
-    if (els.targetName) els.targetName.textContent = target.displayName || target.username || "—";
-    if (els.targetUser) els.targetUser.textContent = `@${target.username || "—"}`;
-    if (els.targetCid) els.targetCid.textContent = `cid ${target.cid || "—"}`;
+    if (els.targetName) els.targetName.textContent = target.displayName || target.username || "â€”";
+    if (els.targetUser) els.targetUser.textContent = `@${target.username || "â€”"}`;
+    if (els.targetCid) els.targetCid.textContent = `cid ${target.cid || "â€”"}`;
     if (els.targetOnline) els.targetOnline.textContent = target.online ? "online" : "offline";
     if (els.targetSince) els.targetSince.textContent = state.watchStartedAt ? `${timeOf(state.watchStartedAt)}` : "agora";
 
@@ -1729,7 +1729,7 @@
       if (target.isAp) els.targetBadges.appendChild(makeBadge("AP", "tag-ap"));
     }
 
-    document.title = `${target.displayName || target.username || "Nick"} — IMVU Radar`;
+    document.title = `${target.displayName || target.username || "Nick"} â€” IMVU Radar`;
   }
 
   // ---------------- render: sala ----------------
@@ -1755,10 +1755,10 @@
     } else if (state.status === "offline") {
       if (els.roomEmptyTitle) els.roomEmptyTitle.textContent = "Fora de sala";
       if (els.roomEmptyText) {
-        els.roomEmptyText.textContent = "O alvo não está em nenhuma sala agora. O radar continua ligado e avisa quando mudar.";
+        els.roomEmptyText.textContent = "O alvo nÃ£o estÃ¡ em nenhuma sala agora. O radar continua ligado e avisa quando mudar.";
       }
     } else if (state.status === "error") {
-      if (els.roomEmptyTitle) els.roomEmptyTitle.textContent = "Não foi possível rastrear";
+      if (els.roomEmptyTitle) els.roomEmptyTitle.textContent = "NÃ£o foi possÃ­vel rastrear";
       if (els.roomEmptyText) els.roomEmptyText.textContent = state.statusText || "Confira o nick e tente novamente.";
     } else {
       setRoomEmptyDefaults();
@@ -1769,7 +1769,7 @@
   }
 
   const ROOM_TYPE_META = {
-    PUBLIC: { label: "Pública", className: "tag-public" },
+    PUBLIC: { label: "PÃºblica", className: "tag-public" },
     PRIVATE: { label: "Privada", className: "tag-private" },
     MY_ROOM: { label: "My Room", className: "tag-myroom" },
     AP: { label: "AP", className: "tag-ap" },
@@ -1808,7 +1808,7 @@
   }
 
   function roomDisplayName(room) {
-    if (!room) return "—";
+    if (!room) return "â€”";
     const roomId = String(room.roomId || "").trim();
     const rawName = String(room.name || "").trim();
     const type = roomTypeOf(room);
@@ -1821,7 +1821,7 @@
     if (!genericName) return rawName;
     if (type === "MY_ROOM") return "My Room";
     if (isPrivate) return `Sala Privada (ID: ${roomId || "?"})`;
-    return roomId ? `Sala Pública (ID: ${roomId})` : "—";
+    return roomId ? `Sala PÃºblica (ID: ${roomId})` : "â€”";
   }
 
   function renderRoomsGrid() {
@@ -1861,7 +1861,7 @@
       const occupancy = Math.max(Number(room.occupancy) || 0, people.length);
       const capacity = Number(room.capacity) > 0 ? ` / cap. ${room.capacity}` : "";
       bits.push(`${occupancy}${capacity} na sala`);
-      info.textContent = bits.join(" · ");
+      info.textContent = bits.join(" Â· ");
 
       const actions = document.createElement("div");
       actions.className = "room-card-actions";
@@ -1904,7 +1904,7 @@
 
       const direct = document.createElement("div");
       direct.className = "room-card-link mono";
-      direct.textContent = link ? readableLink(link) : "—";
+      direct.textContent = link ? readableLink(link) : "â€”";
 
       const roster = document.createElement("div");
       roster.className = "room-roster";
@@ -1931,7 +1931,7 @@
       if (!sorted.length) {
         const empty = document.createElement("span");
         empty.className = "room-roster-empty";
-        empty.textContent = "ninguém visível";
+        empty.textContent = "ninguÃ©m visÃ­vel";
         roster.appendChild(empty);
       } else if (people.length > sorted.length) {
         const more = document.createElement("span");
@@ -2003,8 +2003,8 @@
       const targetName = state.target.displayName || state.target.username || "Nick";
       document.title =
         rooms.length > 1
-          ? `${targetName} em ${rooms.length} salas — IMVU Radar`
-          : `${targetName} em ${roomDisplayName(room)} — IMVU Radar`;
+          ? `${targetName} em ${rooms.length} salas â€” IMVU Radar`
+          : `${targetName} em ${roomDisplayName(room)} â€” IMVU Radar`;
     }
   }
 
@@ -2024,7 +2024,7 @@
       const empty = document.createElement("div");
       empty.className =
         "col-span-full rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-slate-500";
-      empty.textContent = state.room ? "Ninguém visível na sala." : "Ninguém para mostrar ainda.";
+      empty.textContent = state.room ? "NinguÃ©m visÃ­vel na sala." : "NinguÃ©m para mostrar ainda.";
       els.occupants.appendChild(empty);
       return;
     }
@@ -2049,10 +2049,10 @@
       body.className = "min-w-0 flex-1";
       const name = document.createElement("div");
       name.className = "occupant-name";
-      name.textContent = person.displayName || person.username || person.nick || "—";
+      name.textContent = person.displayName || person.username || person.nick || "â€”";
       const user = document.createElement("div");
       user.className = "occupant-user";
-      user.textContent = `@${person.username || person.nick || "—"}`;
+      user.textContent = `@${person.username || person.nick || "â€”"}`;
       body.append(name, user);
       card.appendChild(body);
 
@@ -2098,7 +2098,7 @@
       els.toasts.firstElementChild?.remove();
     }
 
-    const icons = { success: "+", danger: "−", warn: "!", info: "i" };
+    const icons = { success: "+", danger: "âˆ’", warn: "!", info: "i" };
     const element = document.createElement("div");
     element.className = `toast toast-${kind}`;
 
@@ -2123,7 +2123,7 @@
     close.className = "toast-close";
     close.type = "button";
     close.setAttribute("aria-label", "Fechar");
-    close.textContent = "×";
+    close.textContent = "Ã—";
     close.addEventListener("click", () => dismissToast(element));
 
     element.append(icon, body, close);
@@ -2153,7 +2153,7 @@
       }
       toast(successMessage, { kind: "info", detail: text, timeout: 2500 });
     } catch {
-      toast("Não foi possível copiar", { kind: "warn", detail: text, timeout: 3000 });
+      toast("NÃ£o foi possÃ­vel copiar", { kind: "warn", detail: text, timeout: 3000 });
     }
   }
 
@@ -2176,13 +2176,13 @@
     els.targetContent?.classList.add("hidden");
     if (els.targetEmptyTitle) els.targetEmptyTitle.textContent = "Nenhum nick ainda";
     if (els.targetEmptyText) {
-      els.targetEmptyText.textContent = "Digite um nick acima e clique em Vigiar para começar a monitorar.";
+      els.targetEmptyText.textContent = "Digite um nick acima e clique em Vigiar para comeÃ§ar a monitorar.";
     }
     if (els.targetEmptyAvatar) els.targetEmptyAvatar.textContent = "?";
     renderRoom();
     renderOccupants();
     setStatus("idle", "Aguardando");
-    document.title = "IMVU Radar — presença em tempo real";
+    document.title = "IMVU Radar â€” presenÃ§a em tempo real";
     alertsRender();
   }
 
@@ -2225,7 +2225,7 @@
     if (!nick) {
       els.watchForm.querySelector(".search-box")?.classList.add("shake");
       setTimeout(() => document.querySelector(".search-box")?.classList.remove("shake"), 420);
-      toast("Digite um nick", { kind: "warn", detail: "O nick é obrigatório para iniciar o rastreio." });
+      toast("Digite um nick", { kind: "warn", detail: "O nick Ã© obrigatÃ³rio para iniciar o rastreio." });
       els.nickInput?.focus();
       return;
     }
@@ -2249,7 +2249,7 @@
       kind: "info",
       detail: alerts.enabled
         ? "Os alertas continuam ativos no painel."
-        : "O radar não está mais vigiando esse nick.",
+        : "O radar nÃ£o estÃ¡ mais vigiando esse nick.",
     });
   });
 
@@ -2310,7 +2310,7 @@
     }
   });
 
-  // Enter no input já usa o form. Botão "Parar" fica oculto até vigiar.
+  // Enter no input jÃ¡ usa o form. BotÃ£o "Parar" fica oculto atÃ© vigiar.
 
   const savedNick = safeStorage.get("radar:nick");
   if (savedNick && els.nickInput && !els.nickInput.value) {
@@ -2343,4 +2343,5 @@
     }
   }, 25_000);
 })();
+
 

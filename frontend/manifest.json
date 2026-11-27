@@ -1,9 +1,9 @@
-{
+﻿{
   "name": "IMVU Radar",
   "short_name": "Radar",
   "description": "Acompanhe a sala atual de qualquer nick do IMVU em tempo real.",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#06060b",
   "theme_color": "#7c3aed",
@@ -16,3 +16,4 @@
     }
   ]
 }
+

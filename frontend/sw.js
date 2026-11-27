@@ -1,4 +1,4 @@
-/* IMVU Radar - service worker para notificacoes locais e Web Push */
+﻿/* IMVU Radar - service worker para notificacoes locais e Web Push */
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -8,9 +8,12 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+const iconUrl = () => new URL("icons/icon-192.png", self.registration.scope).href;
+const homeUrl = () => new URL("./", self.registration.scope).href;
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = event.notification?.data?.url || "/";
+  const target = event.notification?.data?.url || homeUrl();
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clients) => {
       for (const client of clients) {
@@ -41,10 +44,11 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "IMVU Radar";
   const options = {
     body: payload.body || "",
-    icon: payload.icon || "/icons/icon-192.png",
-    badge: "/icons/icon-192.png",
+    icon: typeof payload.icon === "string" && /^https?:/i.test(payload.icon) ? payload.icon : iconUrl(),
+    badge: iconUrl(),
     tag: payload.tag || "imvu-radar",
-    data: { url: payload.url || "/" },
+    data: { url: payload.url || homeUrl() },
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
+
