@@ -314,15 +314,15 @@
           if (Array.isArray(seat) && seat.length >= 3) {
             sprite.position.set(
               Number(seat[0]) || 0,
-              (Number(seat[1]) || 0) + 1.6,
+              (Number(seat[1]) || 0) + 1.2,
               Number(seat[2]) || 0
             );
             return;
           }
-          const spread = 1.7;
+          const spread = 1.2;
           sprite.position.set(
             centerX + (index - (avatarSprites.length - 1) / 2) * spread,
-            2.1,
+            1.2,
             fallbackZ
           );
         });
@@ -546,8 +546,8 @@
             depthWrite: false,
           });
           const sprite = new THREE.Sprite(spriteMaterial);
-          sprite.position.set(px, 2.1, avatarZ);
-          sprite.scale.set(3.2, 4.2, 1);
+          sprite.position.set(px, 1.2, avatarZ);
+          sprite.scale.set(1.4, 2.4, 1);
           sprite.userData = {
             name: String(occupant.displayName || occupant.username || "Avatar"),
             occupant,
@@ -622,7 +622,6 @@
         shellGroup: shellRoot,
         furnitureGroups,
       };
-      window.Cinema3D.__ctx = ctx;
 
       window.Cinema3D.debug = () => ({
         ready,
@@ -647,12 +646,10 @@
   function stop() {
     if (!ctx) {
       window.Cinema3D.debug = emptyDebug;
-      window.Cinema3D.__ctx = null;
       return;
     }
     const current = ctx;
     ctx = null;
-    window.Cinema3D.__ctx = null;
     if (current.life) current.life.cancelled = true;
     try {
       cancelAnimationFrame(current.getAnimationId());

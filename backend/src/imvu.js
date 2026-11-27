@@ -786,18 +786,6 @@ export class ImvuApi {
       bounds,
       counts: { furniture: furniture.length, products: products.size, models: assetModels.size },
       warning: furniture.length ? "" : "A sala não expôs móveis para o 3D.",
-      debug: {
-        roomRelations: relations,
-        shellUrl,
-        roomShellNode:
-          Object.entries(shellEnv?.denormalized || {}).find(([key]) =>
-            key.includes("/room_shell_product/")
-          )?.[1] || null,
-        shellData,
-        shellRelations: shellNode?.relations || {},
-        sceneData,
-        sceneRelations: sceneNode?.relations || {},
-      },
     };
 
     this.room3dCache.set(id, { at: now(), data });
