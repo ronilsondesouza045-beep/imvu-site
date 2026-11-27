@@ -70,6 +70,8 @@
     open: false,
     roomId: "",
     room: null,
+    room3d: null,
+    mode: "2d",
     panzoom: null,
     requestId: 0,
     chatCount: 0,
@@ -156,6 +158,10 @@
     cinemaRoomImage: $("#cinemaRoomImage"),
     cinemaAvatars: $("#cinemaAvatars"),
     cinemaEmpty: $("#cinemaEmpty"),
+    cinemaHint: $("#cinemaHint"),
+    cinema3dWrap: $("#cinema3dWrap"),
+    cinema3dLoading: $("#cinema3dLoading"),
+    cinema3dLoadingText: $("#cinema3dLoadingText"),
     cinemaMessages: $("#cinemaMessages"),
     cinemaChatCount: $("#cinemaChatCount"),
     cinemaChatHint: $("#cinemaChatHint"),
@@ -1157,11 +1163,14 @@
     cinema.panzoom = null;
   }
 
-  function openCinema(room) {
+  function openCinema(room, { mode = "2d" } = {}) {
     if (!room?.roomId) return;
+    const is3d = mode === "3d";
     cinema.open = true;
     cinema.roomId = String(room.roomId);
     cinema.room = room;
+    cinema.room3d = null;
+    cinema.mode = is3d ? "3d" : "2d";
     cinema.chatCount = 0;
     const requestId = cinema.requestId + 1;
     cinema.requestId = requestId;
@@ -1172,12 +1181,30 @@
         roomTypeOf(room) === "PRIVATE" ? "privada" : "pública"
       } · ${(room.occupants || []).length || room.total || 0} na sala`;
     }
-    setCinemaStatus("conectando...", "");
+    setCinemaStatus(is3d ? "carregando 3D..." : "conectando...", "");
     if (els.cinemaChatCount) els.cinemaChatCount.textContent = "0";
-    resetCinemaMessages("Iniciando observador invisível...");
+    resetCinemaMessages(is3d ? "Carregando sala 3D..." : "Iniciando observador invisível...");
     if (els.cinemaChatHint) els.cinemaChatHint.textContent = "O bot observa sem entrar na sala.";
-    setCinemaRoomImage(room.image || room.render || room.cover || room.thumbnail || "");
-    renderCinemaOccupants(room.occupants || (state.room?.roomId === room.roomId ? state.occupants : []));
+
+    els.cinemaStage?.classList.toggle("hidden", is3d);
+    els.cinema3dWrap?.classList.toggle("hidden", !is3d);
+    if (els.cinemaHint) {
+      els.cinemaHint.textContent = is3d
+        ? "Arraste para orbitar · roda para zoom"
+        : "Arraste para mover · roda/pinça para zoom";
+    }
+
+    if (is3d) {
+      window.Cinema3D?.stop();
+      els.cinema3dLoading?.classList.remove("hidden");
+      if (els.cinema3dLoadingText) els.cinema3dLoadingText.textContent = "Carregando sala...";
+      els.cinemaEmpty?.classList.add("hidden");
+    } else {
+      window.Cinema3D?.stop();
+      setCinemaRoomImage(room.image || room.render || room.cover || room.thumbnail || "");
+      renderCinemaOccupants(room.occupants || (state.room?.roomId === room.roomId ? state.occupants : []));
+      setTimeout(startCinemaPanzoom, 80);
+    }
 
     els.cinemaOverlay?.classList.remove("hidden");
     els.cinemaModal?.classList.remove("hidden");
@@ -1188,36 +1215,88 @@
       els.cinemaOverlay?.classList.add("is-open");
     });
     document.body.style.overflow = "hidden";
-    setTimeout(startCinemaPanzoom, 80);
 
-    fetch(`${HTTP_BASE}/api/sala-2d/${encodeURIComponent(room.roomId)}`, { cache: "no-store" })
-      .then(async (response) => {
-        const json = await response.json().catch(() => ({}));
-        if (!response.ok || !json?.ok || !json.room) {
-          throw new Error(json?.error || "Sala indisponível no momento.");
-        }
-        if (!cinema.open || requestId !== cinema.requestId) return;
-        const data = json.room;
-        cinema.room = data;
-        if (els.cinemaTitle) els.cinemaTitle.textContent = data.name || roomDisplayName(room);
-        if (els.cinemaMeta) {
-          els.cinemaMeta.textContent = `#${data.roomId} · ${data.privacyLabel || "—"} · ${data.occupancy || 0} na sala`;
-        }
-        setCinemaRoomImage(data.image || data.thumbnail || "");
-        renderCinemaOccupants(data.occupants || []);
-        if (!data.chat) {
-          setCinemaStatus("sem chat clássico", "warn");
-          if (els.cinemaChatHint) els.cinemaChatHint.textContent = "Esta sala não tem chat clássico.";
-        }
-      })
-      .catch((error) => {
-        if (!cinema.open || requestId !== cinema.requestId) return;
-        setCinemaStatus("imagem indisponível", "warn");
-        if (els.cinemaChatHint) els.cinemaChatHint.textContent = error?.message || "Não foi possível carregar a sala 2D.";
-      });
+    if (is3d) {
+      loadCinema3d(room, requestId);
+    } else {
+      fetch(`${HTTP_BASE}/api/sala-2d/${encodeURIComponent(room.roomId)}`, { cache: "no-store" })
+        .then(async (response) => {
+          const json = await response.json().catch(() => ({}));
+          if (!response.ok || !json?.ok || !json.room) {
+            throw new Error(json?.error || "Sala indisponível no momento.");
+          }
+          if (!cinema.open || requestId !== cinema.requestId) return;
+          const data = json.room;
+          cinema.room = data;
+          if (els.cinemaTitle) els.cinemaTitle.textContent = data.name || roomDisplayName(room);
+          if (els.cinemaMeta) {
+            els.cinemaMeta.textContent = `#${data.roomId} · ${data.privacyLabel || "—"} · ${data.occupancy || 0} na sala`;
+          }
+          setCinemaRoomImage(data.image || data.thumbnail || "");
+          renderCinemaOccupants(data.occupants || []);
+          if (!data.chat) {
+            setCinemaStatus("sem chat clássico", "warn");
+            if (els.cinemaChatHint) els.cinemaChatHint.textContent = "Esta sala não tem chat clássico.";
+          }
+        })
+        .catch((error) => {
+          if (!cinema.open || requestId !== cinema.requestId) return;
+          setCinemaStatus("imagem indisponível", "warn");
+          if (els.cinemaChatHint) els.cinemaChatHint.textContent = error?.message || "Não foi possível carregar a sala 2D.";
+        });
+    }
 
     if (!wsSend({ type: "cinema_join", roomId: cinema.roomId })) {
       connect();
+    }
+  }
+
+  async function loadCinema3d(room, requestId) {
+    try {
+      const response = await fetch(`${HTTP_BASE}/api/sala-3d/${encodeURIComponent(room.roomId)}`, {
+        cache: "no-store",
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || !json?.ok || !json.room) {
+        throw new Error(json?.error || "Sala 3D indisponível no momento.");
+      }
+      if (!cinema.open || requestId !== cinema.requestId || cinema.mode !== "3d") return;
+      const data = json.room;
+      cinema.room3d = data;
+      if (els.cinemaTitle) els.cinemaTitle.textContent = data.name || roomDisplayName(room);
+      if (els.cinemaMeta) {
+        els.cinemaMeta.textContent = `#${data.roomId} · 3D experimental · ${data.assets?.length || 0} objetos · ${data.occupants?.length || 0} avatares`;
+      }
+      if (!window.Cinema3D || typeof window.THREE === "undefined") {
+        throw new Error("Three.js não carregou. Verifique sua conexão.");
+      }
+      window.Cinema3D.start(els.cinema3dWrap, data, {
+        imageUrl: proxiedImage,
+        onReady: () => {
+          if (!cinema.open || requestId !== cinema.requestId) return;
+          els.cinema3dLoading?.classList.add("hidden");
+          setCinemaStatus("3D experimental", "");
+        },
+        onError: (message) => {
+          if (!cinema.open || requestId !== cinema.requestId) return;
+          if (els.cinema3dLoading) {
+            els.cinema3dLoading.classList.remove("hidden");
+            if (els.cinema3dLoadingText) {
+              els.cinema3dLoadingText.textContent = message || "Falha ao carregar o 3D.";
+            }
+          }
+          setCinemaStatus("3D indisponível", "warn");
+        },
+      });
+    } catch (error) {
+      if (!cinema.open || requestId !== cinema.requestId) return;
+      if (els.cinema3dLoading) {
+        els.cinema3dLoading.classList.remove("hidden");
+        if (els.cinema3dLoadingText) {
+          els.cinema3dLoadingText.textContent = error?.message || "Não foi possível carregar a sala 3D.";
+        }
+      }
+      setCinemaStatus("3D indisponível", "warn");
     }
   }
 
@@ -1227,9 +1306,16 @@
     cinema.open = false;
     cinema.roomId = "";
     cinema.room = null;
+    cinema.room3d = null;
+    cinema.mode = "2d";
     cinema.requestId += 1;
     cinema.occupants.clear();
     stopCinemaPanzoom();
+    window.Cinema3D?.stop();
+    els.cinema3dWrap?.classList.add("hidden");
+    els.cinema3dLoading?.classList.add("hidden");
+    els.cinemaStage?.classList.remove("hidden");
+    if (els.cinemaHint) els.cinemaHint.textContent = "Arraste para mover · roda/pinça para zoom";
     wsSend({ type: "cinema_leave", roomId });
     els.cinemaModal?.classList.remove("is-open");
     els.cinemaOverlay?.classList.remove("is-open");
@@ -1784,6 +1870,12 @@
       cinemaBtn.dataset.roomId = roomId;
       cinemaBtn.textContent = "Assistir Sala";
       actions.appendChild(cinemaBtn);
+      const cinema3dBtn = document.createElement("button");
+      cinema3dBtn.type = "button";
+      cinema3dBtn.className = "btn-ghost room-card-btn room-cinema3d-btn";
+      cinema3dBtn.dataset.roomId = roomId;
+      cinema3dBtn.textContent = "Ver em 3D";
+      actions.appendChild(cinema3dBtn);
       if (directLink) {
         const open = document.createElement("a");
         open.className = "btn-primary room-card-btn";
@@ -2161,6 +2253,12 @@
   });
 
   els.roomsList?.addEventListener("click", (event) => {
+    const cinema3dBtn = event.target.closest(".room-cinema3d-btn");
+    if (cinema3dBtn) {
+      const room = state.rooms.find((item) => item.roomId === cinema3dBtn.dataset.roomId);
+      if (room) openCinema(room, { mode: "3d" });
+      return;
+    }
     const cinemaBtn = event.target.closest(".room-cinema-btn");
     if (cinemaBtn) {
       const room = state.rooms.find((item) => item.roomId === cinemaBtn.dataset.roomId);

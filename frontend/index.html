@@ -489,8 +489,14 @@
             <img id="cinemaRoomImage" class="cinema-room-image" alt="Fundo 2D da sala" />
             <div id="cinemaAvatars" class="cinema-avatars"></div>
           </div>
+          <div id="cinema3dWrap" class="cinema-3d-wrap hidden">
+            <div id="cinema3dLoading" class="cinema-3d-loading">
+              <span class="cinema-3d-spinner"></span>
+              <span id="cinema3dLoadingText">Carregando sala...</span>
+            </div>
+          </div>
           <div id="cinemaEmpty" class="cinema-empty hidden">Sala sem imagem 2D disponível.</div>
-          <div class="cinema-hint">Arraste para mover · roda/pinça para zoom</div>
+          <div id="cinemaHint" class="cinema-hint">Arraste para mover · roda/pinça para zoom</div>
         </div>
 
         <aside class="cinema-chat" aria-label="Chat ao vivo da sala">
@@ -509,8 +515,13 @@
     <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/panzoom@9.4.3/dist/panzoom.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
     <script src="config.js"></script>
     <script src="app.js"></script>
     <script src="radio.js"></script>
+    <script src="cinema3d.js"></script>
   </body>
 </html>

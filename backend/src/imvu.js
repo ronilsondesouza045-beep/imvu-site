@@ -89,6 +89,7 @@ export class ImvuApi {
     this.userCache = new Map();
     this.userNodeCache = new Map();
     this.profileCache = new Map();
+    this.room3dCache = new Map();
     this.friendCidsCache = { at: 0, cids: new Set() };
     this.roomMetaCache = new Map();
     this.rosterCache = new Map();
@@ -414,6 +415,192 @@ export class ImvuApi {
       if (oldest) this.profileCache.delete(oldest);
     }
     return profile;
+  }
+
+  /**
+   * Dados experimentais para o Modo Cinema 3D: shell/scene da sala, lista de
+   * moveis com posicao/rotacao/scale, imagens dos produtos, asset CFL e roster.
+   * Os assets reais do IMVU sao CFL (Cal3D); o frontend tenta glTF/OBJ quando
+   * houver modelUrl e cai para caixas texturizadas nos demais casos.
+   */
+  async room3d(roomId, ttl = 60_000) {
+    const id = String(roomId || "");
+    if (!/^\d+-\d+$/.test(id)) return null;
+    const cached = this.room3dCache.get(id);
+    if (cached && now() - cached.at < ttl) return cached.data;
+
+    const roomEnv = await this.getJson(`/room/room-${id}`).catch(() => null);
+    const roomDen = roomEnv?.denormalized || {};
+    let roomNode = null;
+    for (const [key, node] of Object.entries(roomDen)) {
+      if (key.endsWith(`/room/room-${id}`) && node?.data) {
+        roomNode = node;
+        break;
+      }
+    }
+    if (!roomNode) return null;
+    const relations = roomNode.relations || {};
+
+    const sceneUrl = String(relations.scene || "");
+    const shellUrl = String(relations.shell_product || "");
+    const [sceneEnv, shellEnv] = await Promise.all([
+      sceneUrl ? this.getJson(sceneUrl.replace(API, "")).catch(() => null) : Promise.resolve(null),
+      shellUrl ? this.getJson(shellUrl.replace(API, "")).catch(() => null) : Promise.resolve(null),
+    ]);
+
+    const firstWithData = (env, predicate) => {
+      for (const node of Object.values(env?.denormalized || {})) {
+        if (node?.data && (!predicate || predicate(node.data))) return node;
+      }
+      return null;
+    };
+    const sceneNode = firstWithData(
+      sceneEnv,
+      (data) =>
+        data.room_asset_url !== undefined ||
+        data.scene_asset_url !== undefined ||
+        data.preview_image !== undefined
+    );
+    const shellNode = firstWithData(
+      shellEnv,
+      (data) => data.product_id !== undefined || data.product_name !== undefined
+    );
+    const sceneData = sceneNode?.data || {};
+    const shellData = shellNode?.data || {};
+
+    const furnitureUrl = String(
+      sceneNode?.relations?.furniture || (sceneUrl ? `${sceneUrl}/furniture` : "")
+    );
+    const furnitureEnv = furnitureUrl
+      ? await this.getJson(furnitureUrl.replace(API, "")).catch(() => null)
+      : null;
+    const furnitureDen = furnitureEnv?.denormalized || {};
+    const itemUrls = roomListItems(furnitureEnv);
+
+    const furniture = [];
+    const productIds = new Set();
+    for (const itemUrl of itemUrls) {
+      const wrapper = furnitureDen[itemUrl];
+      if (!wrapper) continue;
+      const ref = String(wrapper.relations?.ref || itemUrl);
+      const data = furnitureDen[ref]?.data || wrapper.data || {};
+      const productId = String(data.product_id || "");
+      if (!productId) continue;
+      furniture.push({
+        instanceId: intOr(data.instance_id, 0),
+        node: String(data.node || ""),
+        productId,
+        x: Number(data.x) || 0,
+        y: Number(data.y) || 0,
+        z: Number(data.z) || 0,
+        yaw: Number(data.yaw) || 0,
+        pitch: Number(data.pitch) || 0,
+        roll: Number(data.roll) || 0,
+        scale: Number(data.scale) || 1,
+        assetUrl: normalizeUrl(data.asset_url || ""),
+      });
+      productIds.add(productId);
+      if (furniture.length >= 80) break;
+    }
+
+    // Metadados dos produtos (nome/imagem) para as caixas do 3D.
+    const products = new Map();
+    const ids = [...productIds].slice(0, 40);
+    let productIndex = 0;
+    const productWorkers = Array.from({ length: Math.min(5, ids.length || 1) }, async () => {
+      while (true) {
+        const i = productIndex++;
+        if (i >= ids.length) return;
+        const pid = ids[i];
+        const env = await this.getJson(`/product/product-${pid}`).catch(() => null);
+        const node = firstWithData(
+          env,
+          (data) => data.product_name !== undefined || data.product_image !== undefined
+        );
+        if (node?.data) products.set(pid, node.data);
+      }
+    });
+    await Promise.all(productWorkers);
+
+    const assets = furniture.map((item) => {
+      const product = products.get(item.productId) || {};
+      const assetUrl = normalizeUrl(product.asset_url || item.assetUrl || "");
+      const modelUrl = /\.(glb|gltf|obj)(\?|$)/i.test(assetUrl) ? assetUrl : "";
+      return {
+        id: item.instanceId || `${item.productId}-${item.node}`,
+        instanceId: item.instanceId,
+        node: item.node,
+        productId: item.productId,
+        name: String(product.product_name || `Móvel ${item.productId}`),
+        image: normalizeUrl(product.product_image || ""),
+        assetUrl,
+        modelUrl,
+        type: modelUrl ? (modelUrl.toLowerCase().includes(".obj") ? "obj" : "gltf") : "cfl",
+        position: [item.x, item.y, item.z],
+        rotation: [item.pitch, item.yaw, item.roll],
+        scale: item.scale,
+      };
+    });
+
+    const xs = furniture.map((item) => item.x);
+    const zs = furniture.map((item) => item.z);
+    const bounds = {
+      minX: xs.length ? Math.min(...xs) : -10,
+      maxX: xs.length ? Math.max(...xs) : 10,
+      minZ: zs.length ? Math.min(...zs) : -10,
+      maxZ: zs.length ? Math.max(...zs) : 10,
+    };
+
+    const people = await this.roster(id, 0).catch(() => []);
+    const occupants = people
+      .filter((person) => person?.cid && String(person.cid) !== String(this.cid))
+      .map((person) => ({
+        cid: person.cid,
+        username: person.username,
+        displayName: person.displayName,
+        avatar: person.avatar || "",
+        portrait: person.avatarPortrait || person.portrait || "",
+        lookThumbnail: person.lookThumbnail || "",
+        lookImage: person.lookImage || "",
+        seatNumber: person.seatNumber || 0,
+        isVip: Boolean(person.isVip),
+        isAp: Boolean(person.isAp),
+        online: Boolean(person.online),
+      }));
+
+    const renderedImage = normalizeUrl(
+      roomNode.data.rendered_image || sceneData.preview_image || roomNode.data.image_url || ""
+    );
+    const data = {
+      roomId: id,
+      name: String(roomNode.data.name || `Sala ${id}`),
+      renderedImage,
+      previewImage: normalizeUrl(sceneData.preview_image || renderedImage),
+      shell: {
+        productId: String(shellData.product_id || ""),
+        name: String(shellData.product_name || ""),
+        image: normalizeUrl(shellData.product_image || ""),
+        assetUrl: normalizeUrl(shellData.asset_url || sceneData.room_asset_url || ""),
+        sceneUrl: normalizeUrl(shellData.scene_url || ""),
+      },
+      scene: {
+        roomAssetUrl: normalizeUrl(sceneData.room_asset_url || ""),
+        sceneAssetUrl: normalizeUrl(sceneData.scene_asset_url || ""),
+        previewImage: normalizeUrl(sceneData.preview_image || ""),
+      },
+      assets,
+      occupants,
+      bounds,
+      counts: { furniture: furniture.length, products: products.size },
+      warning: furniture.length ? "" : "A sala não expôs móveis para o 3D.",
+    };
+
+    this.room3dCache.set(id, { at: now(), data });
+    if (this.room3dCache.size > 50) {
+      const oldest = this.room3dCache.keys().next().value;
+      if (oldest) this.room3dCache.delete(oldest);
+    }
+    return data;
   }
 
   /**

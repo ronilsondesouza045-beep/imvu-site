@@ -356,6 +356,31 @@ app.get("/api/sala-2d/:roomId", async (req, res) => {
   }
 });
 
+// Modo Cinema 3D (experimental): shell/scene, moveis e texturas.
+app.get("/api/sala-3d/:roomId", async (req, res) => {
+  const roomId = String(req.params.roomId || "").trim();
+  if (!/^\d+-\d+$/.test(roomId)) {
+    res.status(400).json({ error: "ID de sala invalido. Use o formato 123456-1." });
+    return;
+  }
+  const logged = await tracker.ensureLogin();
+  if (!logged) {
+    res.status(503).json({ error: tracker.api.lastError || "login falhou" });
+    return;
+  }
+  try {
+    const room = await tracker.api.room3d(roomId);
+    if (!room) {
+      res.status(404).json({ error: "sala 3D nao encontrada" });
+      return;
+    }
+    res.setHeader("Cache-Control", "public, max-age=60");
+    res.json({ ok: true, room });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || String(error) });
+  }
+});
+
 app.use(
   express.static(path.join(__dirname, "..", "frontend"), {
     extensions: ["html"],

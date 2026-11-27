@@ -1305,6 +1305,65 @@ kbd {
   font-size: 9.5px;
 }
 
+/* ---------------- modo cinema 3D ---------------- */
+
+.room-cinema3d-btn {
+  border-color: rgba(33, 212, 253, 0.35) !important;
+  color: #a5f3fc !important;
+}
+
+.room-cinema3d-btn:hover {
+  background: rgba(33, 212, 253, 0.1) !important;
+}
+
+.cinema-3d-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.cinema-3d-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.cinema-3d-canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.cinema-3d-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  background: rgba(5, 7, 12, 0.82);
+  color: #cbd5e1;
+  font-size: 12px;
+  text-align: center;
+}
+
+.cinema-3d-spinner {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 2px solid rgba(167, 139, 250, 0.25);
+  border-top-color: #a78bfa;
+  border-radius: 50%;
+  animation: cinema-spin 0.8s linear infinite;
+}
+
+@keyframes cinema-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 900px) {
   .cinema-modal {
     inset: 0;
