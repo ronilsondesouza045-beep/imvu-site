@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+﻿import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -20,6 +20,20 @@ const YTDLP_READY = fs.existsSync(YTDLP);
 
 const clean = (value) => String(value ?? "").trim();
 
+const YTDLP_COOKIES = clean(process.env.YTDLP_COOKIES) || "";
+const YTDLP_COOKIES_FILE =
+  YTDLP_COOKIES && fs.existsSync(YTDLP_COOKIES) ? YTDLP_COOKIES : "";
+const YTDLP_EXTRACTOR_ARGS =
+  clean(process.env.YTDLP_EXTRACTOR_ARGS) ||
+  "youtube:player_client=android,web_safari,tv_embedded";
+
+function ytdlpBaseArgs() {
+  const args = [];
+  if (YTDLP_COOKIES_FILE) args.push("--cookies", YTDLP_COOKIES_FILE);
+  if (YTDLP_EXTRACTOR_ARGS) args.push("--extractor-args", YTDLP_EXTRACTOR_ARGS);
+  return args;
+}
+
 function withTimeout(promise, ms, message) {
   let timer;
   return Promise.race([
@@ -38,13 +52,30 @@ function youtubeId(url) {
   }
 }
 
+async function youtubeOembed(url) {
+  try {
+    const response = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+      { signal: AbortSignal.timeout(10_000) }
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    return {
+      title: clean(data.title),
+      thumbnail: clean(data.thumbnail_url),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function runYtDlpJson(args) {
   return new Promise((resolve, reject) => {
     if (!YTDLP_READY) {
-      reject(new Error("binário do yt-dlp não instalado (rode npm install)."));
+      reject(new Error("binÃ¡rio do yt-dlp nÃ£o instalado (rode npm install)."));
       return;
     }
-    const child = spawn(YTDLP, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(YTDLP, [...ytdlpBaseArgs(), ...args], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -57,13 +88,13 @@ function runYtDlpJson(args) {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `yt-dlp terminou com código ${code}`));
+        reject(new Error(stderr.trim() || `yt-dlp terminou com cÃ³digo ${code}`));
         return;
       }
       try {
         resolve(JSON.parse(stdout));
       } catch {
-        reject(new Error("yt-dlp retornou JSON inválido."));
+        reject(new Error("yt-dlp retornou JSON invÃ¡lido."));
       }
     });
   });
@@ -91,7 +122,7 @@ async function searchSoundCloud(query) {
 /** Search YouTube and return one normalized song. */
 export async function searchSong(query) {
   const text = clean(query);
-  if (!text) throw new Error("Digite o nome da música. Ex.: !play Michael Jackson - Billie Jean");
+  if (!text) throw new Error("Digite o nome da mÃºsica. Ex.: !play Michael Jackson - Billie Jean");
 
   if (YOUTUBE_URL.test(text)) {
     try {
@@ -108,25 +139,39 @@ export async function searchSong(query) {
         thumbnail: details.thumbnails?.[0]?.url || "",
         query: text,
       };
-    } catch {
-      const info = await withTimeout(
-        runYtDlpJson([
-          "--dump-single-json",
-          "--no-warnings",
-          "--no-playlist",
-          "--skip-download",
-          text,
-        ]),
-        SEARCH_TIMEOUT_MS,
-        "O YouTube demorou para responder."
-      );
-      return {
-        title: clean(info.title) || text,
-        url: info.webpage_url || info.original_url || text,
-        durationSec: Number(info.duration) || 0,
-        thumbnail: info.thumbnail || "",
-        query: text,
-      };
+    } catch (error) {
+      try {
+        const info = await withTimeout(
+          runYtDlpJson([
+            "--dump-single-json",
+            "--no-warnings",
+            "--no-playlist",
+            "--skip-download",
+            text,
+          ]),
+          SEARCH_TIMEOUT_MS,
+          "O YouTube demorou para responder."
+        );
+        return {
+          title: clean(info.title) || text,
+          url: info.webpage_url || info.original_url || text,
+          durationSec: Number(info.duration) || 0,
+          thumbnail: info.thumbnail || "",
+          query: text,
+        };
+      } catch (ytdlpError) {
+        const meta = await youtubeOembed(text);
+        if (meta?.title) {
+          return {
+            title: meta.title,
+            url: text,
+            durationSec: 0,
+            thumbnail: meta.thumbnail || "",
+            query: text,
+          };
+        }
+        throw ytdlpError;
+      }
     }
   }
 
@@ -165,7 +210,7 @@ export async function searchSong(query) {
 
   const title = clean(info.title) || text;
   const url = info.webpage_url || info.url || `https://www.youtube.com/watch?v=${youtubeId(info.id || "")}`;
-  if (!url || !youtubeId(url)) throw new Error("Nenhuma música encontrada no YouTube.");
+  if (!url || !youtubeId(url)) throw new Error("Nenhuma mÃºsica encontrada no YouTube.");
 
   return {
     title,
@@ -177,10 +222,11 @@ export async function searchSong(query) {
 }
 
 function openYtDlp(url) {
-  if (!YTDLP_READY) throw new Error("binário do yt-dlp não instalado (rode npm install).");
+  if (!YTDLP_READY) throw new Error("binÃ¡rio do yt-dlp nÃ£o instalado (rode npm install).");
   const child = spawn(
     YTDLP,
     [
+      ...ytdlpBaseArgs(),
       "--format",
       "bestaudio/best",
       "--output",
@@ -230,13 +276,13 @@ function openYtDlp(url) {
     const onClose = (code) => {
       if (code !== 0) {
         const reason = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" | ");
-        finish(new Error(reason || `yt-dlp terminou com código ${code}`));
+        finish(new Error(reason || `yt-dlp terminou com cÃ³digo ${code}`));
       } else if (!firstChunk) {
-        finish(new Error("yt-dlp terminou sem entregar áudio."));
+        finish(new Error("yt-dlp terminou sem entregar Ã¡udio."));
       }
     };
     const timer = setTimeout(
-      () => finish(new Error("yt-dlp não entregou áudio em 15s.")),
+      () => finish(new Error("yt-dlp nÃ£o entregou Ã¡udio em 15s.")),
       15_000
     );
     stream.once("data", onData);
@@ -265,7 +311,7 @@ function openYtDlp(url) {
 
 async function openPlayDl(url) {
   const result = await play.stream(url);
-  if (!result?.stream) throw new Error("play-dl não retornou áudio.");
+  if (!result?.stream) throw new Error("play-dl nÃ£o retornou Ã¡udio.");
   return {
     kind: "play-dl",
     stream: result.stream,
@@ -314,7 +360,7 @@ async function preflight(source, label, errors) {
 /** Open the best available audio source for a song. */
 export async function openAudio(song) {
   const url = clean(song?.url);
-  if (!url) throw new Error("Música sem URL do YouTube.");
+  if (!url) throw new Error("MÃºsica sem URL do YouTube.");
 
   const errors = [];
 
@@ -326,7 +372,7 @@ export async function openAudio(song) {
   }
 
   // O IP de datacenter do Render costuma ser bloqueado pelo YouTube. O
-  // SoundCloud não tem esse challenge; o título original continua no chat.
+  // SoundCloud nÃ£o tem esse challenge; o tÃ­tulo original continua no chat.
   const fallbackQuery = clean(song?.title) || clean(song?.query);
   if (fallbackQuery) {
     try {
@@ -356,12 +402,12 @@ export async function openAudio(song) {
     errors.push(`ytdl-core: ${error?.message || error}`);
   }
 
-  throw new Error(`Não consegui abrir o áudio: ${errors.join(" | ")}`);
+  throw new Error(`NÃ£o consegui abrir o Ã¡udio: ${errors.join(" | ")}`);
 }
 
 /** Open a live MP3 stream (ffmpeg transcodes the YouTube audio in real time). */
 export async function openMp3Stream(song) {
-  if (!ffmpegPath) throw new Error("ffmpeg-static não está disponível neste servidor.");
+  if (!ffmpegPath) throw new Error("ffmpeg-static nÃ£o estÃ¡ disponÃ­vel neste servidor.");
 
   const source = await openAudio(song);
   const ffmpeg = spawn(
@@ -389,7 +435,7 @@ export async function openMp3Stream(song) {
   const mp3 = new PassThrough();
   ffmpeg.stdout.pipe(mp3);
   ffmpeg.on("error", (error) => {
-    console.warn(`[song] ffmpeg não iniciou: ${error?.message || error}`);
+    console.warn(`[song] ffmpeg nÃ£o iniciou: ${error?.message || error}`);
     mp3.destroy(error);
   });
 
@@ -429,3 +475,4 @@ export async function openMp3Stream(song) {
     },
   };
 }
+
