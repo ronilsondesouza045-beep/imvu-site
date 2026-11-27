@@ -4,18 +4,19 @@ Versão web do **IMVU Radar**: qualquer pessoa digita um nick e vê, em tempo re
 
 ## Online agora
 
-- **Site:** https://imvu-radar-web.netlify.app
+- **Site:** https://ronilsondesouza045-beep.github.io/imvu-site/
 - **Backend:** https://imvu-radar-backend.onrender.com
 - **Health:** https://imvu-radar-backend.onrender.com/health
 - **Repo:** https://github.com/ronilsondesouza045-beep/imvu-site
 - **Painel Render:** https://dashboard.render.com/web/srv-dbp5ob0n74is73cuq7jg
 
-O Render faz auto-deploy a cada push na `main`. O frontend na Netlify é um deploy manual; para atualizar depois de mudar o `frontend/`:
+O Render faz auto-deploy do backend a cada push na `main`. O frontend é publicado no GitHub Pages pelo workflow `.github/workflows/pages.yml` sempre que algo em `frontend/` muda. Para atualizar o site:
 
 ```powershell
-cd C:\Users\ronis\Desktop\imvu-site\frontend
-netlify deploy --prod --dir . --no-build
+git push origin main
 ```
+
+A conta Netlify atual está sem créditos e mantém uma versão antiga; o deploy oficial agora é o GitHub Pages.
 
 O backend foi escrito em Node.js replicando o que o app Android (Kotlin) já faz:
 
@@ -121,6 +122,8 @@ PORT=8080
 IMVU_USER=sua_conta
 IMVU_PASS=sua_senha
 CORS_ORIGIN=*
+# URL publica do frontend usada nos links de notificacao
+SITE_URL=https://ronilsondesouza045-beep.github.io/imvu-site
 MAX_WATCHERS=20
 TARGET_ROOM_SCAN=800
 OWN_ROOM_SCAN=120
@@ -150,7 +153,7 @@ RADIO_SECRET=
 | `MAX_WATCHERS` | limite de navegadores vigiando ao mesmo tempo |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | chaves Web Push (gere com `npx web-push generate-vapid-keys --json`) |
 | `VAPID_SUBJECT` | contato do VAPID, ex. `mailto:seu@email` |
-| `SITE_URL` | URL pública do frontend usada no clique da notificação |
+| `SITE_URL` | URL pública do frontend usada no clique da notificação (padrão: `https://ronilsondesouza045-beep.github.io/imvu-site`) |
 | `ALERT_TTL_MS` | quanto tempo um alerta push fica ativo (padrão 2h) |
 | `MAX_ALERTS` | limite de assinaturas push simultâneas (padrão 30) |
 | `TARGET_ROOM_SCAN` | quantas filas `chat-<cid>-1..N` assinar (1–800) |
@@ -396,7 +399,13 @@ https://SEU-SERVICO.onrender.com/health
 
 > O plano free do Render dorme após alguns minutos sem tráfego. A primeira conexão depois do sono demora ~20–40s; o frontend reconecta sozinho e reenvia o `watch`.
 
-### Frontend na Vercel
+### Frontend no GitHub Pages (deploy atual)
+
+O workflow `.github/workflows/pages.yml` publica `frontend/` em **https://ronilsondesouza045-beep.github.io/imvu-site/** a cada push na `main` que altere o frontend. Não precisa de CLI nem build local.
+
+O `frontend/config.js` aponta para o backend no Render; o CORS `*` permite o site em qualquer host.
+
+### Frontend na Vercel (alternativa)
 
 1. Edite `frontend/config.js`:
 
@@ -411,12 +420,12 @@ window.RADAR_BACKEND = "https://SEU-SERVICO.onrender.com";
 
 Abra a URL da Vercel. O app conecta em `wss://SEU-SERVICO.onrender.com`.
 
-### Frontend na Netlify (alternativa)
+### Frontend na Netlify (alternativa — conta atual sem créditos)
 
 1. Edite `frontend/config.js` com a URL do Render.
 2. Netlify: **Add new site → Import an existing project**.
 3. Base directory: `frontend`. Publish directory: `.`. Build command: vazio.
-4. Deploy. O `netlify.toml` já está pronto.
+4. Deploy. O `netlify.toml` já está pronto. A conta atual está bloqueada por créditos; use o GitHub Pages.
 
 ### Cloudflare Workers?
 

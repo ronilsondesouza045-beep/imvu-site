@@ -93,6 +93,7 @@ app.get("/health", (_req, res) => {
     service: "imvu-radar-backend",
     version: VERSION,
     uptime: Math.round(process.uptime()),
+    siteUrl: String(process.env.SITE_URL || "https://ronilsondesouza045-beep.github.io/imvu-site").replace(/\/+$/, ""),
     ...tracker.stats(),
     telegram: telegram.stats(),
     cinema: cinema.stats(),
