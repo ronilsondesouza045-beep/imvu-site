@@ -520,7 +520,7 @@ export class ImvuApi {
   async shellCamera(scene) {
     const object = scene?.objects?.[0] || {};
     const cameraDef = Array.isArray(object.cameras) ? object.cameras[0] : null;
-    const skeletonUrl = normalizeUrl(object?.skeleton?.url || "");
+    const skeletonUrl = absoluteAssetUrl(object?.skeleton?.url || "");
     if (!cameraDef?.bone || !skeletonUrl) return null;
     const skeleton = await this.fetchAssetJson(skeletonUrl).catch(() => null);
     const bones = Array.isArray(skeleton?.bones) ? skeleton.bones : [];
