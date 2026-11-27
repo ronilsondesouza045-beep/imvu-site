@@ -1444,6 +1444,14 @@
               ? "O bot observa sem entrar na sala."
               : "Esta sala não tem chat clássico.";
           }
+          if (els.cinemaMessages) {
+            const empty = els.cinemaMessages.querySelector(".cinema-chat-empty");
+            if (empty) {
+              empty.textContent = message.chat
+                ? "Nenhuma mensagem ainda. O chat aparece aqui em tempo real."
+                : "Esta sala não tem chat clássico.";
+            }
+          }
         }
         break;
 
