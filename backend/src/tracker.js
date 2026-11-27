@@ -263,7 +263,10 @@ export class RadarTracker {
       locationHiddenAt: 0,
       gen: 0,
       lastLive: new Set(),
+      liveStreaks: new Map(),
       myRoomStreak: 0,
+      ownRoomPromise: null,
+      backgroundDiscoveryPromise: null,
       probeInFlight: null,
       pendingRoomLoads: new Map(),
       refreshTimers: new Map(),
@@ -600,12 +603,18 @@ export class RadarTracker {
     // 1) Lista de amigos do bot: o IMVU denormaliza a sala atual de cada
     // amigo. Inclui o fallback de sala privada (roster 403) do Tracker.kt.
     this.emitStatus(track, "loading", "Consultando salas dos amigos...");
-    if (await this.checkFriendsRoom(track)) return;
+    if (await this.checkFriendsRoom(track)) {
+      this.scheduleBackgroundDiscovery(track, gen);
+      return;
+    }
     if (!active()) return;
 
     // 2) Varredura ativa das salas publicas mais movimentadas.
     this.emitStatus(track, "loading", "Varrendo salas publicas...");
-    if (await this.scanPublicRooms(track, { force: true })) return;
+    if (await this.scanPublicRooms(track, { force: true })) {
+      this.scheduleBackgroundDiscovery(track, gen);
+      return;
+    }
     if (!active()) return;
 
     // 3) current_room do perfil como fallback (pode estar oculto).
@@ -621,6 +630,7 @@ export class RadarTracker {
     }
     if (relationRoom) {
       await this.setRoom(track, relationRoom, { via: "user_relation", gen });
+      this.scheduleBackgroundDiscovery(track, gen);
       return;
     }
 
@@ -629,7 +639,10 @@ export class RadarTracker {
     const catvu = await catvuPromise;
     if (catvu?.rooms?.length) {
       this.emitStatus(track, "loading", "Catvu: sala localizada, lendo ocupantes...");
-      if (await this.applyCatvuResult(track, catvu, gen)) return;
+      if (await this.applyCatvuResult(track, catvu, gen)) {
+        this.scheduleBackgroundDiscovery(track, gen);
+        return;
+      }
     }
     if (!active()) return;
 
@@ -648,6 +661,7 @@ export class RadarTracker {
         via: "listas",
         gen,
       });
+      this.scheduleBackgroundDiscovery(track, gen);
       return;
     }
 
@@ -664,13 +678,18 @@ export class RadarTracker {
         via: "own_rooms",
         gen,
       });
+      this.scheduleBackgroundDiscovery(track, gen);
       return;
     }
 
     // 7) Probe do IMQ: filas chat-<cid>-* vivas.
     this.emitStatus(track, "loading", "Sondando canais em tempo real...");
     await this.probeTick(track);
-    if (!active() || track.room) return;
+    if (!active()) return;
+    if (track.rooms.size) {
+      this.scheduleBackgroundDiscovery(track, gen);
+      return;
+    }
 
     // Nenhuma fonte devolveu sala. Se o alvo esta online, o IMVU esta
     // ocultando a localizacao (Show Current Room = Profile Only/None).
@@ -795,6 +814,76 @@ export class RadarTracker {
       }
     }
     return false;
+  }
+
+  /**
+   * Descobre salas PROPRIAS do alvo (My Room / privadas) pelas filas de chat
+   * dele no IMQ: chat-<cid>-N viva em dois probes seguidos. O REST dessas
+   * salas costuma ser 403, entao a fila e a unica prova disponivel.
+   */
+  async discoverOwnRooms(track, gen = track.gen) {
+    if (this.tracks.get(track.cid) !== track) return false;
+    if (track.ownRoomPromise) return track.ownRoomPromise;
+    track.ownRoomPromise = (async () => {
+      const first = await this.imq.probeQueues(track.cid, PROBE_TIMEOUT_MS);
+      if (!this.isActive(track, gen)) return false;
+      const own = first.filter(
+        (rid) => rid.startsWith(`${track.cid}-`) && !track.rooms.has(rid)
+      );
+      if (!own.length) return false;
+
+      // Confirma que a fila continua viva alguns segundos depois; evita
+      // adicionar uma sala antiga que so apareceu uma vez.
+      await sleep(5_000);
+      if (!this.isActive(track, gen)) return false;
+      const second = await this.imq.probeQueues(track.cid, PROBE_TIMEOUT_MS);
+      if (!this.isActive(track, gen)) return false;
+
+      const persistent = own.filter((rid) => second.includes(rid) && !track.rooms.has(rid));
+      let added = 0;
+      for (const rid of persistent) {
+        const people = await this.api.roster(rid, 1_500).catch(() => []);
+        if (!this.isActive(track, gen)) return added > 0;
+        const seed = people.some((person) => person.cid === track.cid) ? people : null;
+        await this.setRoom(track, rid, {
+          seed,
+          via: "imq_own_room",
+          hint: { isPrivate: rid !== `${track.cid}-1`, privacy: "private" },
+          gen: track.gen,
+        });
+        added += 1;
+      }
+      return added > 0;
+    })()
+      .catch(() => false)
+      .finally(() => {
+        track.ownRoomPromise = null;
+      });
+    return track.ownRoomPromise;
+  }
+
+  /**
+   * Depois do primeiro card, continua a busca em background para cobrir o
+   * resto: salas proprias (My Room/privadas) e varredura publica profunda
+   * (se ela ainda nao rodou).
+   */
+  scheduleBackgroundDiscovery(track, gen) {
+    if (this.tracks.get(track.cid) !== track) return null;
+    if (track.backgroundDiscoveryPromise) return track.backgroundDiscoveryPromise;
+    track.backgroundDiscoveryPromise = (async () => {
+      await sleep(400);
+      if (!this.isActive(track, gen)) return;
+      const tasks = [this.discoverOwnRooms(track, gen)];
+      if (now() - (track.lastPublicScanAt || 0) >= PUBLIC_SCAN_MS || !track.rooms.size) {
+        tasks.push(this.scanPublicRooms(track, { force: true }));
+      }
+      await Promise.allSettled(tasks);
+    })()
+      .catch(() => {})
+      .finally(() => {
+        track.backgroundDiscoveryPromise = null;
+      });
+    return track.backgroundDiscoveryPromise;
   }
 
   async acquirePublicScanSlot() {
@@ -1110,6 +1199,32 @@ export class RadarTracker {
     if (own.length === 1 && !track.rooms.size) {
       await this.setRoom(track, own[0], { via: "imq_probe", gen: track.gen });
       return;
+    }
+
+    // 5) Salas PROPRIAS (<cid>-N) vivas em dois probes seguidos. O REST
+    //    dessas salas costuma ser 403 (AUTHORIZATION-003), entao a fila de
+    //    chat e a prova disponivel para My Room/custom/privadas.
+    if (!track.liveStreaks) track.liveStreaks = new Map();
+    const ownSet = new Set(own);
+    for (const rid of own) {
+      track.liveStreaks.set(rid, (track.liveStreaks.get(rid) || 0) + 1);
+    }
+    for (const rid of [...track.liveStreaks.keys()]) {
+      if (!ownSet.has(rid)) track.liveStreaks.delete(rid);
+    }
+    const persistentOwn = [...track.liveStreaks.entries()]
+      .filter(([rid, count]) => count >= 2 && !track.rooms.has(rid))
+      .map(([rid]) => rid);
+    for (const rid of persistentOwn) {
+      const people = await this.api.roster(rid, 1_500).catch(() => []);
+      if (this.tracks.get(track.cid) !== track) return;
+      const seed = people.some((person) => person.cid === track.cid) ? people : null;
+      await this.setRoom(track, rid, {
+        seed,
+        via: "imq_own_room",
+        hint: { isPrivate: rid !== `${track.cid}-1`, privacy: "private" },
+        gen: track.gen,
+      });
     }
 
     track.lastLive = new Set(own);

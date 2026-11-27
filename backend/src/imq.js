@@ -429,50 +429,70 @@ export class ImqClient {
   }
 
   /**
-   * Assina chat-<cid>-1..N na MESMA conexao e mede o status de cada fila.
+   * Assina um lote de filas e devolve Map<queue, status>.
+   * Lotes pequenos (~300) respondem em <1s; 800 numa tacada estourava o
+   * timeout e o servidor nao devolvia os status.
+   */
+  async probeQueueChunk(queues, timeoutMs = 4_000) {
+    const statuses = new Map();
+    if (!queues?.length || !this.authed) return statuses;
+    let remaining = queues.length;
+    let resolveAll = null;
+    const all = new Promise((resolve) => {
+      resolveAll = resolve;
+    });
+    const timer = setTimeout(() => resolveAll(), Math.max(500, timeoutMs));
+
+    const frames = queues.map((queue) => {
+      const op = this.nextOp();
+      this.pending.set(op, (status) => {
+        statuses.set(queue, status);
+        remaining -= 1;
+        if (remaining <= 0) resolveAll();
+      });
+      return { record: "subscription", name: queue, op_id: op };
+    });
+
+    const sent = this.send({ record: "msg_c2g_subscribe", queues_with_results: frames });
+    if (!sent) {
+      clearTimeout(timer);
+      for (const frame of frames) this.pending.delete(frame.op_id);
+      return statuses;
+    }
+    for (const frame of frames) this.subscribed.add(frame.name);
+
+    await all;
+    clearTimeout(timer);
+    for (const frame of frames) this.pending.delete(frame.op_id);
+    return statuses;
+  }
+
+  /**
+   * Assina chat-<cid>-1..N em lotes e mede o status de cada fila.
    * status 0 = fila existe (sala ativa/recente).
    */
   async probeQueues(cid, timeoutMs = 12_000) {
     if (!this.authed) return [];
     const id = String(cid || "");
     if (!/^\d+$/.test(id)) return [];
-    const queues = [];
-    for (let n = 1; n <= this.targetScan; n += 1) {
-      queues.push(`inv:/chat/chat-${id}-${n}`);
-    }
     const live = new Set();
-    let remaining = queues.length;
-    let resolveCompletion;
-    const completion = new Promise((resolve) => {
-      resolveCompletion = resolve;
-    });
-    const timer = setTimeout(() => resolveCompletion(), timeoutMs);
+    const deadline = now() + timeoutMs;
+    const chunkSize = 300;
 
-    const pairs = queues.map((queue) => {
-      const op = this.nextOp();
-      const rid = queue.slice("inv:/chat/chat-".length);
-      this.pending.set(op, (status) => {
-        if (status === 0) live.add(rid);
-        remaining -= 1;
-        if (remaining <= 0) resolveCompletion();
-      });
-      return { queue, op };
-    });
-
-    for (let i = 0; i < pairs.length; i += 400) {
-      const chunk = pairs.slice(i, i + 400);
-      const frames = chunk.map(({ queue, op }) => ({
-        record: "subscription",
-        name: queue,
-        op_id: op,
-      }));
-      this.send({ record: "msg_c2g_subscribe", queues_with_results: frames });
-      for (const { queue } of chunk) this.subscribed.add(queue);
+    for (let n = 1; n <= this.targetScan; n += chunkSize) {
+      if (now() >= deadline) break;
+      const queues = [];
+      for (let k = n; k < Math.min(this.targetScan + 1, n + chunkSize); k += 1) {
+        queues.push(`inv:/chat/chat-${id}-${k}`);
+      }
+      const chunkTimeout = Math.min(4_000, Math.max(1_000, deadline - now()));
+      const statuses = await this.probeQueueChunk(queues, chunkTimeout);
+      for (const [queue, status] of statuses) {
+        if (status !== 0) continue;
+        const rid = queue.slice("inv:/chat/chat-".length);
+        if (/^\d+-\d+$/.test(rid)) live.add(rid);
+      }
     }
-
-    await completion;
-    clearTimeout(timer);
-    for (const pair of pairs) this.pending.delete(pair.op);
     return [...live];
   }
 
