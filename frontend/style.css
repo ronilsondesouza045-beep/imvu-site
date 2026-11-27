@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #06060b;
   --panel: rgba(14, 14, 23, 0.78);
   --panel-solid: #0d0d16;
@@ -1348,7 +1348,7 @@ kbd {
   text-align: center;
 }
 
-.cinema-3d-spinner {
+.cinema-3d-loading.hidden {\n  display: none !important;\n}\n\n.cinema-3d-spinner {
   width: 18px;
   height: 18px;
   flex: none;
@@ -2765,5 +2765,6 @@ kbd {
     padding-bottom: 56px;
   }
 }
+
 
 

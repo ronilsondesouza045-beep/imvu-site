@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   "use strict";
 
   let ctx = null;
@@ -112,7 +112,7 @@
     if (!container) return;
     const THREE = window.THREE;
     if (!THREE) {
-      options.onError?.("Three.js não carregou.");
+      options.onError?.("Three.js nÃ£o carregou.");
       return;
     }
 
@@ -128,6 +128,11 @@
       const notifyReady = () => {
         if (ready || life.cancelled) return;
         ready = true;
+        try {
+          container.querySelector(".cinema-3d-loading")?.classList.add("hidden");
+        } catch {
+          /* ignora */
+        }
         options.onReady?.();
       };
       const finish = () => {
@@ -362,7 +367,7 @@
         box.rotation.order = "YXZ";
         box.rotation.set(Number(pitch) || 0, Number(yaw) || 0, Number(roll) || 0);
         box.scale.setScalar(scale);
-        box.userData = { name: String(asset.name || "Móvel"), asset };
+        box.userData = { name: String(asset.name || "MÃ³vel"), asset };
         scene.add(box);
 
         const edges = new THREE.LineSegments(
@@ -601,3 +606,4 @@
     debug: emptyDebug,
   };
 })();
+
