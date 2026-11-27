@@ -602,6 +602,12 @@ export class ImvuApi {
         if (!cid || seen.has(cid)) continue;
         const data = den[ref]?.data || itemNode?.data || {};
         const person = this.personFromData(cid, data);
+        // Dados do participante no chat: look 2D dentro da sala e assento.
+        const participant = itemNode?.data || {};
+        person.lookImage = normalizeUrl(participant.look_image || participant.rendered_image || "");
+        person.lookThumbnail = normalizeUrl(participant.look_thumbnail || "");
+        person.seatNumber = intOr(participant.seat_number, 0);
+        person.seatFurniId = intOr(participant.seat_furni_id, 0);
         this.userCache.set(cid, { at: now(), person });
         seen.add(cid);
         people.push(person);

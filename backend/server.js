@@ -11,6 +11,7 @@ import { pushAvailable, pushPublicKey } from "./src/push.js";
 import { musicBot } from "./src/musicBot.js";
 import { radioStream } from "./src/radioStream.js";
 import { initTelegramBot } from "./src/telegramBot.js";
+import { CinemaService } from "./src/cinema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -38,6 +39,9 @@ const tracker = new RadarTracker({
 // tracker detecta troca de sala (hook chamado dentro do setRoom).
 const telegram = initTelegramBot({ tracker, log });
 tracker.onRoomChange = (track, previousRoom) => telegram.notifyRoomChange(track, previousRoom);
+
+// Modo Cinema: observa o chat classico sem entrar na sala (bot invisivel).
+const cinema = new CinemaService({ log });
 
 const app = express();
 app.disable("x-powered-by");
@@ -91,6 +95,7 @@ app.get("/health", (_req, res) => {
     uptime: Math.round(process.uptime()),
     ...tracker.stats(),
     telegram: telegram.stats(),
+    cinema: cinema.stats(),
     now: Date.now(),
   });
 });
@@ -282,6 +287,75 @@ app.get("/api/avatar", async (req, res) => {
   res.send(image.buffer);
 });
 
+// Modo Cinema: fundo 2D da sala + roster (o chat vem pelo WebSocket).
+app.get("/api/sala-2d/:roomId", async (req, res) => {
+  const roomId = String(req.params.roomId || "").trim();
+  if (!/^\d+-\d+$/.test(roomId)) {
+    res.status(400).json({ error: "ID de sala invalido. Use o formato 123456-1." });
+    return;
+  }
+  const logged = await tracker.ensureLogin();
+  if (!logged) {
+    res.status(503).json({ error: tracker.api.lastError || "login falhou" });
+    return;
+  }
+  try {
+    const [info, people, chatEnv] = await Promise.all([
+      tracker.api.roomInfo(roomId).catch(() => null),
+      tracker.api.roster(roomId, 0).catch(() => []),
+      tracker.api.getJson(`/chat/chat-${roomId}`).catch(() => null),
+    ]);
+    if (!info) {
+      res.status(404).json({ error: "sala nao encontrada" });
+      return;
+    }
+
+    const banned = new Set([String(tracker.api.cid || "")]);
+    const botCid = musicBot.client?.rest?.cid;
+    if (botCid) banned.add(String(botCid));
+
+    const occupants = people
+      .filter((person) => person?.cid && !banned.has(String(person.cid)))
+      .map((person) => ({
+        cid: person.cid,
+        username: person.username,
+        displayName: person.displayName,
+        avatar: person.avatar || "",
+        portrait: person.avatarPortrait || person.portrait || "",
+        lookImage: person.lookImage || "",
+        lookThumbnail: person.lookThumbnail || "",
+        seatNumber: person.seatNumber || 0,
+        isVip: Boolean(person.isVip),
+        isAp: Boolean(person.isAp),
+        online: Boolean(person.online),
+      }));
+
+    const chatNode = Object.values(chatEnv?.denormalized || {}).find(
+      (node) => node?.data?.imq_queue
+    );
+
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      room: {
+        roomId,
+        name: info.name || `Sala ${roomId}`,
+        privacy: info.privacy,
+        privacyLabel: info.privacyLabel,
+        owner: info.owner,
+        occupancy: Math.max(Number(info.occupancy) || 0, occupants.length),
+        capacity: info.capacity,
+        image: info.render || info.cover || "",
+        thumbnail: info.cover || "",
+        chat: Boolean(chatNode?.data?.imq_queue),
+        occupants,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || String(error) });
+  }
+});
+
 app.use(
   express.static(path.join(__dirname, "..", "frontend"), {
     extensions: ["html"],
@@ -304,6 +378,7 @@ wss.on("connection", (ws, req) => {
     ws,
     alive: true,
     track: null,
+    cinemaRooms: new Set(),
     watchGen: 0,
     lastWatchAt: 0,
     lastAlertAt: 0,
@@ -408,6 +483,21 @@ wss.on("connection", (ws, req) => {
       case "alert_test":
         tracker.testAlert(message);
         break;
+      case "cinema_join": {
+        try {
+          await cinema.join(client, message.roomId);
+        } catch (error) {
+          client.send({
+            type: "cinema_error",
+            roomId: String(message.roomId || ""),
+            message: error?.message || "Falha ao iniciar o Modo Cinema.",
+          });
+        }
+        break;
+      }
+      case "cinema_leave":
+        cinema.leave(client, message.roomId);
+        break;
       case "stop":
         tracker.unwatch(client);
         break;
@@ -421,6 +511,7 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", () => {
+    cinema.leaveAll(client);
     tracker.unwatch(client, { silent: true });
     log.info(`[ws] cliente ${client.id} desconectado`);
   });
@@ -455,6 +546,7 @@ function shutdown(signal) {
   }
   tracker.destroy();
   radioStream.shutdown();
+  cinema.shutdown();
   telegram.stop();
   void musicBot.shutdown().catch(() => {});
   server.close(() => process.exit(0));
