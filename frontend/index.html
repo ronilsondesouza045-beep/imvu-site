@@ -414,6 +414,54 @@
       </p>
     </aside>
 
+    <div id="profileOverlay" class="profile-overlay hidden" aria-hidden="true"></div>
+    <section
+      id="profileModal"
+      class="profile-modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="profileModalName"
+      aria-hidden="true"
+    >
+      <button id="profileCloseBtn" class="profile-close" type="button" aria-label="Fechar perfil">×</button>
+
+      <div class="profile-hero">
+        <div id="profileAvatar" class="profile-avatar"></div>
+        <div class="min-w-0 flex-1">
+          <h2 id="profileModalName" class="font-display profile-name">—</h2>
+          <div id="profileUsername" class="profile-username">@—</div>
+          <div id="profileCid" class="mono profile-cid">cid —</div>
+          <div id="profileBadges" class="profile-badges"></div>
+        </div>
+      </div>
+
+      <div id="profileLoading" class="profile-loading">Carregando perfil...</div>
+      <div id="profileError" class="profile-error hidden" role="status" aria-live="polite"></div>
+
+      <div id="profileInfo" class="profile-info hidden">
+        <div class="profile-stats">
+          <div class="profile-stat"><span>Seguidores</span><strong id="profileFollowers">—</strong></div>
+          <div class="profile-stat"><span>Seguindo</span><strong id="profileFollowing">—</strong></div>
+          <div class="profile-stat"><span>Membro desde</span><strong id="profileJoined">—</strong></div>
+          <div class="profile-stat"><span>Idade</span><strong id="profileAge">—</strong></div>
+        </div>
+        <div id="profileStatusBox" class="profile-bio-box hidden">
+          <div class="eyebrow-sm">Status</div>
+          <p id="profileStatus" class="profile-bio"></p>
+        </div>
+        <div id="profileBioBox" class="profile-bio-box hidden">
+          <div class="eyebrow-sm">Bio</div>
+          <p id="profileBio" class="profile-bio"></p>
+        </div>
+      </div>
+
+      <div class="profile-actions">
+        <a id="profileWebLink" class="btn-primary" href="#" target="_blank" rel="noopener">Abrir Perfil no IMVU Web</a>
+        <a id="profileAppLink" class="btn-ghost" href="#" target="_blank" rel="noopener">Abrir no App IMVU</a>
+        <button id="profileCopyBtn" class="btn-ghost" type="button">Copiar Link do Perfil</button>
+      </div>
+    </section>
+
     <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 
     <script src="config.js"></script>

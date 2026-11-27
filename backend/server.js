@@ -128,6 +128,31 @@ app.get("/api/resolve", async (req, res) => {
   }
 });
 
+// Perfil completo para o modal do site (aceita nick ou cid).
+app.get("/api/perfil/:nick", async (req, res) => {
+  const raw = String(req.params.nick || "").trim();
+  if (!raw) {
+    res.status(400).json({ error: "nick ou cid obrigatorio" });
+    return;
+  }
+  const logged = await tracker.ensureLogin();
+  if (!logged) {
+    res.status(503).json({ error: tracker.api.lastError || "login falhou" });
+    return;
+  }
+  try {
+    const profile = await tracker.api.profile(raw);
+    if (!profile) {
+      res.status(404).json({ error: "perfil nao encontrado" });
+      return;
+    }
+    res.setHeader("Cache-Control", "public, max-age=60");
+    res.json({ ok: true, profile });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || String(error) });
+  }
+});
+
 app.get("/api/push/key", (_req, res) => {
   res.json({ enabled: pushAvailable(), key: pushPublicKey() });
 });

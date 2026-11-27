@@ -88,6 +88,7 @@ export class ImvuApi {
 
     this.userCache = new Map();
     this.userNodeCache = new Map();
+    this.profileCache = new Map();
     this.friendCidsCache = { at: 0, cids: new Set() };
     this.roomMetaCache = new Map();
     this.rosterCache = new Map();
@@ -311,6 +312,108 @@ export class ImvuApi {
       return person;
     }
     return null;
+  }
+
+  /**
+   * Perfil completo para o modal do site: nick, cid, avatar grande, bio,
+   * status, seguidores/seguindo exatos, membro desde, idade e flags de AP.
+   * Aceita nick ou cid. Cache de 60s por cid.
+   */
+  async profile(input, ttl = 60_000) {
+    const raw = String(input || "").trim();
+    if (!raw) return null;
+    let cid = "";
+    if (/^\d+$/.test(raw)) {
+      cid = raw;
+    } else {
+      const person = await this.resolve(raw);
+      if (!person) return null;
+      cid = person.cid;
+    }
+    const cached = this.profileCache.get(cid);
+    if (cached && now() - cached.at < ttl) return cached.profile;
+
+    const node = await this.userNode(cid, 0);
+    if (!node?.data) return null;
+    const data = node.data;
+
+    const profileUrl = String(node.relations?.profile || "");
+    const [profileEnv, subsEnv, followingEnv] = await Promise.all([
+      profileUrl
+        ? this.getJson(profileUrl.replace(API, "")).catch(() => null)
+        : Promise.resolve(null),
+      this.getJson(`/profile/profile-user-${cid}/subscribers?limit=1`).catch(() => null),
+      this.getJson(`/profile/profile-user-${cid}/subscriptions?limit=1`).catch(() => null),
+    ]);
+
+    let profileData = null;
+    for (const [key, item] of Object.entries(profileEnv?.denormalized || {})) {
+      if (!key.includes(`/profile/profile-user-${cid}`)) continue;
+      if (!item?.data) continue;
+      if (
+        item.data.avatar_name !== undefined ||
+        item.data.title !== undefined ||
+        item.data.approx_follower_count !== undefined
+      ) {
+        profileData = item.data;
+        break;
+      }
+    }
+
+    const totalFrom = (env) => {
+      for (const item of Object.values(env?.denormalized || {})) {
+        if (item?.data && item.data.total_count !== undefined) {
+          return intOr(item.data.total_count, 0);
+        }
+      }
+      return null;
+    };
+    const followers = totalFrom(subsEnv) ?? intOr(profileData?.approx_follower_count, 0);
+    const following = totalFrom(followingEnv) ?? intOr(profileData?.approx_following_count, 0);
+
+    const username = String(data.username || profileData?.avatar_name || "");
+    const displayName = String(data.display_name || profileData?.title || username || cid);
+    const registered = intOr(data.registered, 0);
+    const joinedAt = String(
+      data.created || (registered ? new Date(registered * 1000).toISOString() : "")
+    );
+    const ageValue = Number(data.age);
+    const age = Number.isFinite(ageValue) && ageValue > 0 ? Math.trunc(ageValue) : null;
+    const encoded = encodeURIComponent(username || cid);
+
+    const profile = {
+      cid,
+      username,
+      displayName,
+      nickname: username || displayName || cid,
+      avatar: normalizeUrl(data.avatar_image || profileData?.image || data.thumbnail_url || ""),
+      portrait: normalizeUrl(data.avatar_portrait_image || data.thumbnail_url || ""),
+      thumbnail: normalizeUrl(data.thumbnail_url || profileData?.image || ""),
+      bio: String(data.interests || "").trim(),
+      status: String(data.tagline || data.availability || "").trim(),
+      followers,
+      following,
+      joinedAt,
+      registered,
+      age,
+      country: String(data.country || ""),
+      gender: String(data.gender || ""),
+      isAp: Boolean(data.is_ap),
+      isApPlus: Boolean(data.is_ap_plus),
+      isApFounder: Boolean(data.is_ap_plus_founder),
+      isVip: Boolean(data.is_vip),
+      isAgeVerified: Boolean(data.is_ageverified),
+      isAdult: Boolean(data.is_adult),
+      online: Boolean(data.online),
+      webUrl: `https://www.imvu.com/next/u/${encoded}/`,
+      appUrl: `https://www.imvu.com/user/${encoded}/`,
+    };
+    this.profileCache.set(cid, { at: now(), profile });
+    if (this.profileCache.size > 300) {
+      const oldest = this.profileCache.keys().next().value;
+      if (oldest) this.profileCache.delete(oldest);
+    }
+    return profile;
   }
 
   /**

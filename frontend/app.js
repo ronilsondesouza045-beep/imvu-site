@@ -59,6 +59,13 @@
     log: [],
   };
 
+  const profileModal = {
+    open: false,
+    cid: "",
+    requestId: 0,
+    cache: new Map(),
+  };
+
   const els = {
     connection: $("#connection"),
     connectionText: $("#connectionText"),
@@ -106,6 +113,28 @@
     alertsStatusText: $("#alertsStatusText"),
     alertsInfo: $("#alertsInfo"),
     alertLog: $("#alertLog"),
+    profileOverlay: $("#profileOverlay"),
+    profileModal: $("#profileModal"),
+    profileCloseBtn: $("#profileCloseBtn"),
+    profileAvatar: $("#profileAvatar"),
+    profileModalName: $("#profileModalName"),
+    profileUsername: $("#profileUsername"),
+    profileCid: $("#profileCid"),
+    profileBadges: $("#profileBadges"),
+    profileLoading: $("#profileLoading"),
+    profileError: $("#profileError"),
+    profileInfo: $("#profileInfo"),
+    profileFollowers: $("#profileFollowers"),
+    profileFollowing: $("#profileFollowing"),
+    profileJoined: $("#profileJoined"),
+    profileAge: $("#profileAge"),
+    profileStatusBox: $("#profileStatusBox"),
+    profileStatus: $("#profileStatus"),
+    profileBioBox: $("#profileBioBox"),
+    profileBio: $("#profileBio"),
+    profileWebLink: $("#profileWebLink"),
+    profileAppLink: $("#profileAppLink"),
+    profileCopyBtn: $("#profileCopyBtn"),
   };
 
   // ---------------- utilidades ----------------
@@ -753,6 +782,197 @@
     alertsSaveSettings();
     alertsRender();
     scheduleAlertExpiry();
+  }
+
+  // ---------------- modal de perfil ----------------
+
+  const profileWebUrl = (username, cid) => {
+    const key = String(username || cid || "").trim();
+    return key ? `https://www.imvu.com/next/u/${encodeURIComponent(key)}/` : "";
+  };
+
+  const profileAppUrl = (username, cid) => {
+    const key = String(username || cid || "").trim();
+    return key ? `https://www.imvu.com/user/${encodeURIComponent(key)}/` : "";
+  };
+
+  const formatProfileNumber = (value) => {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0) return "—";
+    return number.toLocaleString("pt-BR");
+  };
+
+  const formatProfileDate = (value) => {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
+  };
+
+  function renderProfileBadges(data) {
+    if (!els.profileBadges) return;
+    els.profileBadges.replaceChildren();
+    const online = Boolean(data?.online);
+    els.profileBadges.appendChild(makeBadge(online ? "online" : "offline", online ? "tag-online" : "tag-offline"));
+    if (data?.isVip) els.profileBadges.appendChild(makeBadge("VIP", "tag-vip"));
+    if (data?.isAp) els.profileBadges.appendChild(makeBadge("AP", "tag-ap"));
+    if (data?.isAgeVerified || data?.isAdult) {
+      els.profileBadges.appendChild(makeBadge("18+", "tag-adult"));
+    }
+  }
+
+  function renderProfileAvatar(data) {
+    if (!els.profileAvatar) return;
+    els.profileAvatar.replaceChildren();
+    const person = {
+      displayName: data?.displayName || data?.username || "",
+      username: data?.username || "",
+      avatar: data?.avatar || "",
+      avatarPortrait: data?.avatar || data?.portrait || "",
+      portrait: data?.portrait || "",
+    };
+    const avatar = createAvatar(person, "profile-avatar");
+    while (avatar.firstChild) els.profileAvatar.appendChild(avatar.firstChild);
+  }
+
+  function renderProfile(profile, requestId) {
+    if (!profileModal.open || requestId !== profileModal.requestId || !profile) return;
+    els.profileLoading?.classList.add("hidden");
+    els.profileError?.classList.add("hidden");
+
+    if (els.profileModalName) els.profileModalName.textContent = profile.displayName || profile.username || profile.cid;
+    if (els.profileUsername) els.profileUsername.textContent = `@${profile.username || profile.cid || "—"}`;
+    if (els.profileCid) els.profileCid.textContent = `cid ${profile.cid || "—"}`;
+    renderProfileBadges(profile);
+    renderProfileAvatar(profile);
+
+    if (els.profileFollowers) els.profileFollowers.textContent = formatProfileNumber(profile.followers);
+    if (els.profileFollowing) els.profileFollowing.textContent = formatProfileNumber(profile.following);
+    if (els.profileJoined) els.profileJoined.textContent = formatProfileDate(profile.joinedAt);
+    if (els.profileAge) els.profileAge.textContent = profile.age ? `${profile.age} anos` : "—";
+
+    if (els.profileStatusBox && els.profileStatus) {
+      const status = String(profile.status || "").trim();
+      els.profileStatus.textContent = status;
+      els.profileStatusBox.classList.toggle("hidden", !status);
+    }
+    if (els.profileBioBox && els.profileBio) {
+      const bio = String(profile.bio || "").trim();
+      els.profileBio.textContent = bio;
+      els.profileBioBox.classList.toggle("hidden", !bio);
+    }
+
+    const webUrl = profile.webUrl || profileWebUrl(profile.username, profile.cid);
+    const appUrl = profile.appUrl || profileAppUrl(profile.username, profile.cid);
+    if (els.profileWebLink) els.profileWebLink.href = webUrl || "#";
+    if (els.profileAppLink) els.profileAppLink.href = appUrl || "#";
+    if (els.profileCopyBtn) {
+      els.profileCopyBtn.dataset.link = webUrl || "";
+      els.profileCopyBtn.disabled = !webUrl;
+    }
+
+    els.profileInfo?.classList.remove("hidden");
+  }
+
+  function openProfileModal() {
+    if (!els.profileModal || !els.profileOverlay) return;
+    els.profileOverlay.classList.remove("hidden");
+    els.profileModal.classList.remove("hidden");
+    els.profileOverlay.setAttribute("aria-hidden", "false");
+    els.profileModal.setAttribute("aria-hidden", "false");
+    requestAnimationFrame(() => {
+      els.profileModal.classList.add("is-open");
+      els.profileOverlay.classList.add("is-open");
+    });
+    document.body.style.overflow = "hidden";
+    setTimeout(() => els.profileCloseBtn?.focus?.(), 60);
+  }
+
+  function closeProfileModal() {
+    if (!profileModal.open) return;
+    profileModal.open = false;
+    profileModal.cid = "";
+    profileModal.requestId += 1;
+    els.profileModal?.classList.remove("is-open");
+    els.profileOverlay?.classList.remove("is-open");
+    els.profileModal?.setAttribute("aria-hidden", "true");
+    els.profileOverlay?.setAttribute("aria-hidden", "true");
+    setTimeout(() => {
+      if (profileModal.open) return;
+      els.profileModal?.classList.add("hidden");
+      els.profileOverlay?.classList.add("hidden");
+    }, 260);
+    const alertsOpenNow = els.alertsPanel && !els.alertsPanel.classList.contains("hidden");
+    document.body.style.overflow = alertsOpenNow ? "hidden" : "";
+  }
+
+  function openProfile(person) {
+    if (!person?.cid) return;
+    const cid = String(person.cid);
+    const requestId = profileModal.requestId + 1;
+    profileModal.requestId = requestId;
+    profileModal.open = true;
+    profileModal.cid = cid;
+
+    if (els.profileModalName) els.profileModalName.textContent = person.displayName || person.username || cid;
+    if (els.profileUsername) els.profileUsername.textContent = `@${person.username || cid}`;
+    if (els.profileCid) els.profileCid.textContent = `cid ${cid}`;
+    renderProfileBadges(person);
+    renderProfileAvatar(person);
+
+    if (els.profileFollowers) els.profileFollowers.textContent = "—";
+    if (els.profileFollowing) els.profileFollowing.textContent = "—";
+    if (els.profileJoined) els.profileJoined.textContent = "—";
+    if (els.profileAge) els.profileAge.textContent = "—";
+    els.profileInfo?.classList.add("hidden");
+    els.profileError?.classList.add("hidden");
+    if (els.profileError) els.profileError.textContent = "";
+    els.profileLoading?.classList.remove("hidden");
+    if (els.profileLoading) els.profileLoading.textContent = "Carregando perfil...";
+
+    const webUrl = profileWebUrl(person.username, cid);
+    const appUrl = profileAppUrl(person.username, cid);
+    if (els.profileWebLink) els.profileWebLink.href = webUrl || "#";
+    if (els.profileAppLink) els.profileAppLink.href = appUrl || "#";
+    if (els.profileCopyBtn) {
+      els.profileCopyBtn.dataset.link = webUrl || "";
+      els.profileCopyBtn.disabled = !webUrl;
+    }
+
+    openProfileModal();
+
+    const cached = profileModal.cache.get(cid);
+    if (cached && Date.now() - cached.at < 120_000) {
+      renderProfile(cached.profile, requestId);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12_000);
+    fetch(`${HTTP_BASE}/api/perfil/${encodeURIComponent(cid)}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const json = await response.json().catch(() => ({}));
+        if (!response.ok || !json?.ok || !json.profile) {
+          throw new Error(json?.error || "Perfil indisponível no momento.");
+        }
+        profileModal.cache.set(cid, { at: Date.now(), profile: json.profile });
+        renderProfile(json.profile, requestId);
+      })
+      .catch((error) => {
+        if (!profileModal.open || requestId !== profileModal.requestId) return;
+        els.profileLoading?.classList.add("hidden");
+        if (els.profileError) {
+          els.profileError.textContent =
+            error?.name === "AbortError"
+              ? "O IMVU demorou para responder. Tente novamente."
+              : error?.message || "Não foi possível carregar o perfil.";
+          els.profileError.classList.remove("hidden");
+        }
+      })
+      .finally(() => clearTimeout(timer));
   }
 
   // ---------------- mensagens do backend ----------------
@@ -1405,7 +1625,7 @@
     for (const person of sorted) {
       const card = document.createElement("div");
       card.className = `occupant-card${person.cid === targetCid ? " is-target" : ""}`;
-      card.title = "Clique para copiar o nick";
+      card.title = "Clique para ver o perfil";
       card.dataset.cid = person.cid || "";
 
       const avatar = createAvatar(person, "occupant-avatar");
@@ -1429,9 +1649,7 @@
         card.appendChild(vip);
       }
 
-      card.addEventListener("click", () => {
-        copyText(person.username || person.nick || "", "Nick copiado");
-      });
+      card.addEventListener("click", () => openProfile(person));
 
       els.occupants.appendChild(card);
     }
@@ -1630,8 +1848,18 @@
   els.alertsBtn?.addEventListener("click", alertsOpen);
   els.closeAlertsBtn?.addEventListener("click", alertsClose);
   els.alertsOverlay?.addEventListener("click", alertsClose);
+  els.profileCloseBtn?.addEventListener("click", closeProfileModal);
+  els.profileOverlay?.addEventListener("click", closeProfileModal);
+  els.profileCopyBtn?.addEventListener("click", () => {
+    copyText(els.profileCopyBtn.dataset.link || "", "Link do perfil copiado");
+  });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") alertsClose();
+    if (event.key !== "Escape") return;
+    if (profileModal.open) {
+      closeProfileModal();
+      return;
+    }
+    alertsClose();
   });
   els.enableAlertsBtn?.addEventListener("click", enableAlerts);
   els.disableAlertsBtn?.addEventListener("click", () => disableAlerts());
