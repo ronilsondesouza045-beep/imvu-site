@@ -12,6 +12,7 @@ import { musicBot } from "./src/musicBot.js";
 import { radioStream } from "./src/radioStream.js";
 import { initTelegramBot } from "./src/telegramBot.js";
 import { CinemaService } from "./src/cinema.js";
+import { SITE_URL } from "./src/site.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
@@ -93,7 +94,7 @@ app.get("/health", (_req, res) => {
     service: "imvu-radar-backend",
     version: VERSION,
     uptime: Math.round(process.uptime()),
-    siteUrl: String(process.env.SITE_URL || "https://ronilsondesouza045-beep.github.io/imvu-site").replace(/\/+$/, ""),
+    siteUrl: SITE_URL,
     ...tracker.stats(),
     telegram: telegram.stats(),
     cinema: cinema.stats(),

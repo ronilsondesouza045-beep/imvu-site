@@ -123,7 +123,7 @@ IMVU_USER=sua_conta
 IMVU_PASS=sua_senha
 CORS_ORIGIN=*
 # URL publica do frontend usada nos links de notificacao
-SITE_URL=https://ronilsondesouza045-beep.github.io/imvu-site
+PUBLIC_SITE_URL=https://ronilsondesouza045-beep.github.io/imvu-site
 MAX_WATCHERS=20
 TARGET_ROOM_SCAN=800
 OWN_ROOM_SCAN=120
@@ -153,7 +153,7 @@ RADIO_SECRET=
 | `MAX_WATCHERS` | limite de navegadores vigiando ao mesmo tempo |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | chaves Web Push (gere com `npx web-push generate-vapid-keys --json`) |
 | `VAPID_SUBJECT` | contato do VAPID, ex. `mailto:seu@email` |
-| `SITE_URL` | URL pública do frontend usada no clique da notificação (padrão: `https://ronilsondesouza045-beep.github.io/imvu-site`) |
+| `PUBLIC_SITE_URL` | URL pública do frontend usada no clique da notificação (padrão: `https://ronilsondesouza045-beep.github.io/imvu-site`). O antigo `SITE_URL` ainda é lido como fallback, mas o valor legado da Netlify é ignorado. |
 | `ALERT_TTL_MS` | quanto tempo um alerta push fica ativo (padrão 2h) |
 | `MAX_ALERTS` | limite de assinaturas push simultâneas (padrão 30) |
 | `TARGET_ROOM_SCAN` | quantas filas `chat-<cid>-1..N` assinar (1–800) |

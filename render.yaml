@@ -17,7 +17,7 @@ services:
         sync: false
       - key: CORS_ORIGIN
         value: "*"
-      - key: SITE_URL
+      - key: PUBLIC_SITE_URL
         value: "https://ronilsondesouza045-beep.github.io/imvu-site"
       - key: MAX_WATCHERS
         value: "20"

@@ -7,6 +7,7 @@ import {
   catvuPerson,
 } from "./catvu.js";
 import { sendPush, pushAvailable } from "./push.js";
+import { SITE_URL } from "./site.js";
 
 const envInt = (name, fallback) => {
   const value = Number(process.env[name]);
@@ -50,8 +51,6 @@ const LEFT_ROOM_GRACE_MS = envInt("LEFT_ROOM_GRACE_MS", 15_000);
 const RATE_LIMIT_BACKOFF_MS = envInt("RATE_LIMIT_BACKOFF_MS", 30_000);
 const ALERT_TTL_MS = envInt("ALERT_TTL_MS", 2 * 60 * 60 * 1000);
 const MAX_ALERTS = envInt("MAX_ALERTS", 30);
-const SITE_URL = String(process.env.SITE_URL || "https://ronilsondesouza045-beep.github.io/imvu-site").replace(/\/+$/, "");
-
 const now = () => Date.now();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
