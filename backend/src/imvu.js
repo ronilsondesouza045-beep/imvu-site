@@ -11,6 +11,8 @@ const ROSTER_TTL = 6_000;
 const ROOM_LIST_TTL = 20_000;
 // Lista de candidatas publicas (recent/explore/feature/friends) por 2 min.
 const PUBLIC_ROOMS_TTL = 120_000;
+// Diretorio de salas classicas de chat (paginado de 25 em 25) por 2 min.
+const CHAT_DIRECTORY_TTL = 120_000;
 const USER_TTL = 10 * 60_000;
 const IMAGE_TTL = 10 * 60_000;
 const IMAGE_CACHE_MAX = 250;
@@ -26,6 +28,22 @@ function normalizeUrl(value) {
 function roomIdFromUrl(value) {
   const m = /room-(\d+-\d+)\s*$/.exec(String(value || ""));
   return m ? m[1] : "";
+}
+
+/**
+ * Itens de uma resposta de room_list. Quando a URL tem query
+ * (?room_type=chat&start_index=...), o no da lista vem com a chave igual ao
+ * `id` do envelope, nao terminando em "/rooms" e/ou ela pode vir em qualquer
+ * outro no com data.items. Por isso procuramos o primeiro no com items.
+ */
+function roomListItems(env) {
+  const den = env?.denormalized;
+  if (!den) return [];
+  if (env.id && Array.isArray(den[env.id]?.data?.items)) return den[env.id].data.items;
+  for (const node of Object.values(den)) {
+    if (Array.isArray(node?.data?.items)) return node.data.items;
+  }
+  return [];
 }
 
 function cidFromUserUrl(value) {
@@ -75,7 +93,9 @@ export class ImvuApi {
     this.rosterCache = new Map();
     this.roomListCache = new Map();
     this.roomListEntriesCache = new Map();
-    this.publicRoomsCache = { at: 0, rooms: [] };
+    this.publicRoomsCache = { at: 0, rooms: [], requested: 0 };
+    this.chatDirectoryCache = { at: 0, rooms: [], requested: 0 };
+    this.chatDirectoryPromise = null;
     this.imageCache = new Map();
     this.catvuCache = new Map();
   }
@@ -488,6 +508,40 @@ export class ImvuApi {
     return people;
   }
 
+  /** Converte o envelope de uma lista de salas em entradas normalizadas. */
+  roomEntriesFromResponse(env) {
+    const den = env?.denormalized || {};
+    const items = roomListItems(env);
+    const entries = [];
+    const seen = new Set();
+    for (const item of items) {
+      const itemNode = den[item] || {};
+      const ref = itemNode?.relations?.ref || item;
+      const rid = roomIdFromUrl(ref);
+      if (!rid || seen.has(rid)) continue;
+      seen.add(rid);
+      const data = den[ref]?.data || itemNode?.data || {};
+      if (data.name) {
+        this.roomMetaCache.set(rid, {
+          at: now(),
+          meta: { ...data, roomId: rid, restricted: false },
+        });
+      }
+      entries.push({
+        rid,
+        name: String(data.name || ""),
+        privacy: String(data.privacy || ""),
+        occupancy: data.occupancy === null || data.occupancy === undefined ? null : intOr(data.occupancy, 0),
+        capacity: intOr(data.capacity, 0),
+        owner: String(data.owner_avatarname || ""),
+        type: String(data.type || ""),
+        image: normalizeUrl(data.image_url || ""),
+        render: normalizeUrl(data.themed_image_url || data.image_url || ""),
+      });
+    }
+    return entries;
+  }
+
   /**
    * Entradas de uma lista oficial de salas (friends/recent/explore/feature)
    * com nome, privacidade e occupancy denormalizados pelo IMVU.
@@ -500,40 +554,7 @@ export class ImvuApi {
     if (cached && now() - cached.at < ttl) return cached.entries;
 
     const env = await this.getJson(`/room_list/room_list-${this.cid}-${key}/rooms`);
-    const den = env?.denormalized;
-    const entries = [];
-    if (den) {
-      let items = [];
-      for (const [nodeKey, node] of Object.entries(den)) {
-        if (nodeKey.endsWith("/rooms")) items = node?.data?.items || [];
-      }
-      const seen = new Set();
-      for (const item of items) {
-        const itemNode = den[item] || {};
-        const ref = itemNode?.relations?.ref || item;
-        const rid = roomIdFromUrl(ref);
-        if (!rid || seen.has(rid)) continue;
-        seen.add(rid);
-        const data = den[ref]?.data || itemNode?.data || {};
-        if (data.name) {
-          this.roomMetaCache.set(rid, {
-            at: now(),
-            meta: { ...data, roomId: rid, restricted: false },
-          });
-        }
-        entries.push({
-          rid,
-          name: String(data.name || ""),
-          privacy: String(data.privacy || ""),
-          occupancy: data.occupancy === null || data.occupancy === undefined ? null : intOr(data.occupancy, 0),
-          capacity: intOr(data.capacity, 0),
-          owner: String(data.owner_avatarname || ""),
-          type: String(data.type || ""),
-          image: normalizeUrl(data.image_url || ""),
-          render: normalizeUrl(data.themed_image_url || data.image_url || ""),
-        });
-      }
-    }
+    const entries = this.roomEntriesFromResponse(env);
     this.roomListEntriesCache.set(key, { at: now(), entries });
     return entries;
   }
@@ -544,13 +565,73 @@ export class ImvuApi {
   }
 
   /**
-   * Candidatas a sala publica: junta recent/explore/feature/friends, remove
-   * duplicatas e privadas, e ordena pelas mais movimentadas. Cache de 2min.
+   * Diretorio de salas classicas de chat (room_type=chat), paginado de 25 em
+   * 25 com start_index. Cache de 2min. E aqui que ficam as salas que nao
+   * aparecem nas listas personalizadas (recent/explore/feature) do bot.
    */
-  async publicRoomCandidates({ limit = 50, ttl = PUBLIC_ROOMS_TTL } = {}) {
+  async chatRoomDirectory({ maxRooms = 1000, ttl = CHAT_DIRECTORY_TTL, concurrency = 4 } = {}) {
     if (!this.cid) return [];
-    if (this.publicRoomsCache.at && now() - this.publicRoomsCache.at < ttl) {
-      return this.publicRoomsCache.rooms.slice(0, limit);
+    const cached = this.chatDirectoryCache;
+    if (cached?.at && now() - cached.at < ttl && cached.requested >= maxRooms) {
+      return cached.rooms.slice(0, maxRooms);
+    }
+    if (this.chatDirectoryPromise) return this.chatDirectoryPromise;
+
+    const pageSize = 25;
+    const totalPages = Math.max(1, Math.ceil(maxRooms / pageSize));
+    const batchSize = Math.max(1, Math.min(6, concurrency));
+    const rooms = new Map();
+
+    this.chatDirectoryPromise = (async () => {
+      for (let pageStart = 0; pageStart < totalPages; pageStart += batchSize) {
+        const pages = [];
+        for (let page = pageStart; page < Math.min(totalPages, pageStart + batchSize); page += 1) {
+          pages.push(page);
+        }
+        let failed = 0;
+        await Promise.all(
+          pages.map(async (page) => {
+            const start = page * pageSize;
+            const env = await this.getJson(
+              `/room_list/room_list-${this.cid}-explore/rooms?room_type=chat&start_index=${start}&limit=${pageSize}`
+            ).catch(() => null);
+            if (!env) {
+              failed += 1;
+              return;
+            }
+            for (const entry of this.roomEntriesFromResponse(env)) {
+              if (!rooms.has(entry.rid)) rooms.set(entry.rid, entry);
+            }
+          })
+        );
+        if (failed === pages.length) break;
+        if (pageStart + batchSize < totalPages) await delay(120);
+      }
+      const list = [...rooms.values()];
+      this.chatDirectoryCache = { at: now(), rooms: list, requested: maxRooms };
+      return list.slice(0, maxRooms);
+    })()
+      .catch(() => {
+        const fallback = this.chatDirectoryCache?.rooms || [];
+        return fallback.slice(0, maxRooms);
+      })
+      .finally(() => {
+        this.chatDirectoryPromise = null;
+      });
+
+    return this.chatDirectoryPromise;
+  }
+
+  /**
+   * Candidatas a sala publica: junta as listas personalizadas e o diretorio
+   * de salas de chat, remove duplicatas/privadas e ordena pelas mais
+   * movimentadas. Cache de 2min.
+   */
+  async publicRoomCandidates({ limit = 1000, ttl = PUBLIC_ROOMS_TTL } = {}) {
+    if (!this.cid) return [];
+    const cached = this.publicRoomsCache;
+    if (cached?.at && now() - cached.at < ttl && cached.requested >= limit) {
+      return cached.rooms.slice(0, limit);
     }
     const seen = new Map();
     for (const listId of ["recent", "explore", "feature", "friends"]) {
@@ -561,10 +642,16 @@ export class ImvuApi {
         seen.set(entry.rid, entry);
       }
     }
+    const directory = await this.chatRoomDirectory({ maxRooms: limit }).catch(() => []);
+    for (const entry of directory) {
+      if (!entry?.rid || seen.has(entry.rid)) continue;
+      if (String(entry.privacy || "").toLowerCase() === "private") continue;
+      seen.set(entry.rid, entry);
+    }
     const rooms = [...seen.values()].sort(
       (a, b) => (Number(b.occupancy) || 0) - (Number(a.occupancy) || 0)
     );
-    this.publicRoomsCache = { at: now(), rooms };
+    this.publicRoomsCache = { at: now(), rooms, requested: limit };
     return rooms.slice(0, limit);
   }
 

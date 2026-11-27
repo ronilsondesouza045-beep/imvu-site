@@ -29,9 +29,14 @@ const HIDDEN_RETRY_MS = envInt("HIDDEN_RETRY_MS", 60_000);
 // Varredura ativa de salas publicas (recent/explore/feature) para achar o
 // alvo sem depender do current_room.
 const PUBLIC_SCAN_MS = envInt("PUBLIC_SCAN_MS", 120_000);
-const PUBLIC_SCAN_LIMIT = envInt("PUBLIC_SCAN_LIMIT", 50);
-const PUBLIC_SCAN_DEADLINE_MS = envInt("PUBLIC_SCAN_DEADLINE_MS", 25_000);
-const PUBLIC_SCAN_CONCURRENCY = envInt("PUBLIC_SCAN_CONCURRENCY", 5);
+// Diretorio de chat profundo: a sala do alvo pode estar na pagina 24+.
+const PUBLIC_SCAN_LIMIT = envInt("PUBLIC_SCAN_LIMIT", 1000);
+const PUBLIC_SCAN_DEADLINE_MS = envInt("PUBLIC_SCAN_DEADLINE_MS", 120_000);
+const PUBLIC_SCAN_CONCURRENCY = envInt("PUBLIC_SCAN_CONCURRENCY", 8);
+// Varredura periodica em lotes rotativos (cobre o diretorio em ~3 ciclos).
+const PUBLIC_SCAN_BATCH = envInt("PUBLIC_SCAN_BATCH", 400);
+// No maximo N alvos com varredura profunda ao mesmo tempo.
+const PUBLIC_SCAN_TRACKS = envInt("PUBLIC_SCAN_TRACKS", 2);
 // Leitura da relation current_room a cada 5s: detecta troca de sala rapido.
 const ROOM_REFRESH_MS = envInt("ROOM_REFRESH_MS", 5_000);
 // Roster HTTP e metadados continuam mais espacados para nao estourar rate limit.
@@ -133,6 +138,9 @@ export class RadarTracker {
     this.roomRefs = new Map();
     this.alerts = new Map();
     this.imqStarted = false;
+    // Limita varreduras profundas simultaneas (cada uma usa ~8 requests).
+    this.publicScanActive = 0;
+    this.publicScanWaiters = [];
     // Hook externo (Telegram, etc.): chamado quando um track troca de sala.
     this.onRoomChange = null;
 
@@ -271,6 +279,7 @@ export class RadarTracker {
       lastRosterRefreshAt: 0,
       friendsHintAt: 0,
       lastPublicScanAt: 0,
+      publicScanCursor: 0,
       publicScanPromise: null,
       roomSetSeq: 0,
       catvu: null,
@@ -788,11 +797,30 @@ export class RadarTracker {
     return false;
   }
 
+  async acquirePublicScanSlot() {
+    if (this.publicScanActive < PUBLIC_SCAN_TRACKS) {
+      this.publicScanActive += 1;
+      return;
+    }
+    await new Promise((resolve) => this.publicScanWaiters.push(resolve));
+    this.publicScanActive += 1;
+  }
+
+  releasePublicScanSlot() {
+    this.publicScanActive = Math.max(0, this.publicScanActive - 1);
+    const next = this.publicScanWaiters.shift();
+    if (next) next();
+  }
+
   /**
-   * Varredura ativa das salas publicas mais movimentadas (recent/explore/
-   * feature). Confirma pelo roster e adiciona cada sala onde o alvo esta.
-   * Cache da lista: 2 min (ImvuApi.publicRoomCandidates). Por track a
-   * varredura roda no maximo a cada PUBLIC_SCAN_MS para nao estourar rate limit.
+   * Varredura ativa do diretorio de salas publicas de chat (paginado de 25
+   * em 25, ate PUBLIC_SCAN_LIMIT) + listas personalizadas. Confirma pelo
+   * roster e adiciona cada sala onde o alvo esta.
+   *
+   * force=true (watch inicial): varre o diretorio inteiro e retorna assim
+   * que a primeira sala e achada (o resto continua em background).
+   * force=false (loop): varre um lote rotativo a cada PUBLIC_SCAN_MS para
+   * cobrir o diretorio sem estourar rate limit.
    */
   async scanPublicRooms(track, { force = false } = {}) {
     if (this.tracks.get(track.cid) !== track) return false;
@@ -801,61 +829,117 @@ export class RadarTracker {
     if (!force && now() - (track.lastPublicScanAt || 0) < PUBLIC_SCAN_MS) return false;
     track.lastPublicScanAt = now();
 
-    track.publicScanPromise = (async () => {
-      const candidates = await this.api
-        .publicRoomCandidates({ limit: PUBLIC_SCAN_LIMIT })
-        .catch(() => []);
-      if (!candidates.length) return false;
-      const deadline = now() + PUBLIC_SCAN_DEADLINE_MS;
-      let found = false;
-      let index = 0;
+    let earlyResolve = null;
+    const early = new Promise((resolve) => {
+      earlyResolve = resolve;
+    });
 
-      const workers = Array.from(
-        { length: Math.min(PUBLIC_SCAN_CONCURRENCY, candidates.length) },
-        async () => {
-          while (true) {
-            if (this.tracks.get(track.cid) !== track) return;
-            if (now() > deadline) return;
-            const i = index++;
-            if (i >= candidates.length) return;
-            const candidate = candidates[i];
-            const rid = String(candidate?.rid || "");
-            if (!/^\d+-\d+$/.test(rid)) continue;
-            const people = await this.api.roster(rid, 3_000).catch(() => []);
-            if (this.tracks.get(track.cid) !== track) return;
-            if (!people.some((person) => person.cid === track.cid)) continue;
-            found = true;
-            await this.setRoom(track, rid, {
-              seed: people,
-              via: "public_scan",
-              hint: {
-                roomId: rid,
-                name: candidate.name || "",
-                privacy: candidate.privacy || "public",
-                isPrivate: false,
-                occupancy: candidate.occupancy,
-                capacity: candidate.capacity,
-                render: candidate.render || "",
-                cover: candidate.image || "",
-              },
-              gen: track.gen,
-            });
+    const full = (async () => {
+      await this.acquirePublicScanSlot();
+      let progressTimer = null;
+      try {
+        const candidates = await this.api
+          .publicRoomCandidates({ limit: PUBLIC_SCAN_LIMIT })
+          .catch(() => []);
+        if (this.tracks.get(track.cid) !== track) return false;
+        if (!candidates.length) return false;
+
+        let window = candidates;
+        if (!force) {
+          const batchSize = Math.min(PUBLIC_SCAN_BATCH, candidates.length);
+          const start = (track.publicScanCursor || 0) % candidates.length;
+          window = [];
+          for (let i = 0; i < batchSize; i += 1) {
+            window.push(candidates[(start + i) % candidates.length]);
           }
+          track.publicScanCursor = (start + batchSize) % candidates.length;
+        } else {
+          track.publicScanCursor = 0;
         }
-      );
-      await Promise.all(workers);
-      if (found) this.log.info(`[tracker] ${track.nick}: encontrado em sala publica via varredura`);
-      return found;
+
+        const deadline = now() + PUBLIC_SCAN_DEADLINE_MS;
+        const showProgress = force || track.rooms.size === 0;
+        let found = false;
+        let scanned = 0;
+        let index = 0;
+        let lastProgressAt = now();
+
+        if (showProgress) {
+          this.emitStatus(track, "loading", `Varrendo ${window.length} salas públicas...`);
+        }
+
+        progressTimer = setInterval(() => {
+          if (!showProgress || found || this.tracks.get(track.cid) !== track) return;
+          if (now() - lastProgressAt < 7_500) return;
+          lastProgressAt = now();
+          this.emitStatus(track, "loading", `Varrendo salas públicas (${scanned}/${window.length})...`);
+        }, 2_500);
+
+        await Promise.all(
+          Array.from({ length: Math.min(PUBLIC_SCAN_CONCURRENCY, window.length) }, async () => {
+            while (true) {
+              if (this.tracks.get(track.cid) !== track) return;
+              if (now() > deadline) return;
+              const i = index++;
+              if (i >= window.length) return;
+              const candidate = window[i];
+              const rid = String(candidate?.rid || "");
+              if (!/^\d+-\d+$/.test(rid)) {
+                scanned += 1;
+                continue;
+              }
+              let people = await this.api.roster(rid, 2_000).catch(() => []);
+              if (this.api.lastStatus === 429) {
+                await sleep(2_500);
+                people = await this.api.roster(rid, 0).catch(() => []);
+              }
+              scanned += 1;
+              if (this.tracks.get(track.cid) !== track) return;
+              if (!people.some((person) => person.cid === track.cid)) continue;
+              if (!found) {
+                found = true;
+                earlyResolve?.(true);
+              }
+              await this.setRoom(track, rid, {
+                seed: people,
+                via: "public_scan",
+                hint: {
+                  roomId: rid,
+                  name: candidate.name || "",
+                  privacy: candidate.privacy || "public",
+                  isPrivate: false,
+                  occupancy: candidate.occupancy,
+                  capacity: candidate.capacity,
+                  render: candidate.render || "",
+                  cover: candidate.image || "",
+                },
+                gen: track.gen,
+              });
+            }
+          })
+        );
+        if (found) {
+          this.log.info(
+            `[tracker] ${track.nick}: encontrado em sala publica via varredura (${scanned}/${window.length})`
+          );
+        }
+        return found;
+      } finally {
+        if (progressTimer) clearInterval(progressTimer);
+        this.releasePublicScanSlot();
+      }
     })()
       .catch((error) => {
         this.log.warn(`[tracker] varredura publica de ${track.nick} falhou: ${error?.message || error}`);
         return false;
       })
       .finally(() => {
-        track.publicScanPromise = null;
+        if (track.publicScanPromise === full) track.publicScanPromise = null;
       });
 
-    return track.publicScanPromise;
+    track.publicScanPromise = full;
+    const winner = await Promise.race([full, early]);
+    return Boolean(winner);
   }
 
   async syncCurrentRoom(track) {
