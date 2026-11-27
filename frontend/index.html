@@ -462,75 +462,10 @@
       </div>
     </section>
 
-    <div id="cinemaOverlay" class="cinema-overlay hidden" aria-hidden="true"></div>
-    <section
-      id="cinemaModal"
-      class="cinema-modal hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="cinemaTitle"
-      aria-hidden="true"
-    >
-      <header class="cinema-head">
-        <div class="min-w-0">
-          <div class="eyebrow-sm">Modo Cinema · observando</div>
-          <h2 id="cinemaTitle" class="font-display cinema-title">—</h2>
-          <div id="cinemaMeta" class="mono cinema-meta">—</div>
-        </div>
-        <div class="cinema-head-actions">
-          <a
-            id="cinemaWebLink"
-            class="btn-ghost cinema-web-link"
-            href="#"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Abrir esta sala no IMVU Web de verdade"
-            >IMVU Web</a
-          >
-          <span id="cinemaStatus" class="cinema-status">conectando...</span>
-          <button id="cinemaCloseBtn" class="cinema-close" type="button" aria-label="Fechar Modo Cinema">×</button>
-        </div>
-      </header>
-
-      <div class="cinema-body">
-        <div id="cinemaViewport" class="cinema-viewport">
-          <div id="cinemaStage" class="cinema-stage">
-            <img id="cinemaRoomImage" class="cinema-room-image" alt="Fundo 2D da sala" />
-            <div id="cinemaAvatars" class="cinema-avatars"></div>
-          </div>
-          <div id="cinema3dWrap" class="cinema-3d-wrap hidden">
-            <div id="cinema3dLoading" class="cinema-3d-loading">
-              <span class="cinema-3d-spinner"></span>
-              <span id="cinema3dLoadingText">Carregando sala...</span>
-            </div>
-          </div>
-          <div id="cinemaEmpty" class="cinema-empty hidden">Sala sem imagem 2D disponível.</div>
-          <div id="cinemaHint" class="cinema-hint">Arraste para mover · roda/pinça para zoom</div>
-        </div>
-
-        <aside class="cinema-chat" aria-label="Chat ao vivo da sala">
-          <div class="cinema-chat-head">
-            <div class="eyebrow-sm">Chat ao vivo</div>
-            <span id="cinemaChatCount" class="count-pill">0</span>
-          </div>
-          <div id="cinemaMessages" class="cinema-messages" aria-live="polite">
-            <div id="cinemaChatEmpty" class="cinema-chat-empty">Conectando ao chat...</div>
-          </div>
-          <div id="cinemaChatHint" class="cinema-chat-hint">O bot observa sem entrar na sala.</div>
-        </aside>
-      </div>
-    </section>
-
     <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/panzoom@9.4.3/dist/panzoom.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
     <script src="config.js"></script>
     <script src="app.js"></script>
     <script src="radio.js"></script>
-    <script src="cinema3d.js"></script>
   </body>
 </html>

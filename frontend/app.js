@@ -66,17 +66,6 @@
     cache: new Map(),
   };
 
-  const cinema = {
-    open: false,
-    roomId: "",
-    room: null,
-    room3d: null,
-    mode: "2d",
-    panzoom: null,
-    requestId: 0,
-    chatCount: 0,
-    occupants: new Map(),
-  };
 
   const els = {
     connection: $("#connection"),
@@ -147,25 +136,6 @@
     profileWebLink: $("#profileWebLink"),
     profileAppLink: $("#profileAppLink"),
     profileCopyBtn: $("#profileCopyBtn"),
-    cinemaOverlay: $("#cinemaOverlay"),
-    cinemaModal: $("#cinemaModal"),
-    cinemaCloseBtn: $("#cinemaCloseBtn"),
-    cinemaTitle: $("#cinemaTitle"),
-    cinemaMeta: $("#cinemaMeta"),
-    cinemaStatus: $("#cinemaStatus"),
-    cinemaViewport: $("#cinemaViewport"),
-    cinemaStage: $("#cinemaStage"),
-    cinemaRoomImage: $("#cinemaRoomImage"),
-    cinemaAvatars: $("#cinemaAvatars"),
-    cinemaEmpty: $("#cinemaEmpty"),
-    cinemaHint: $("#cinemaHint"),
-    cinema3dWrap: $("#cinema3dWrap"),
-    cinema3dLoading: $("#cinema3dLoading"),
-    cinema3dLoadingText: $("#cinema3dLoadingText"),
-    cinemaWebLink: $("#cinemaWebLink"),
-    cinemaMessages: $("#cinemaMessages"),
-    cinemaChatCount: $("#cinemaChatCount"),
-    cinemaChatHint: $("#cinemaChatHint"),
   };
 
   // ---------------- utilidades ----------------
@@ -267,9 +237,6 @@
       setConnection("online");
       if (state.watching && state.currentNick) {
         wsSend({ type: "watch", nick: state.currentNick });
-      }
-      if (cinema.open && cinema.roomId) {
-        wsSend({ type: "cinema_join", roomId: cinema.roomId });
       }
     });
 
@@ -1009,336 +976,6 @@
       .finally(() => clearTimeout(timer));
   }
 
-  // ---------------- modo cinema ----------------
-
-  function cinemaBotCid() {
-    return String(state.serverStatus?.botCid || "");
-  }
-
-  function setCinemaStatus(text, kind = "") {
-    if (!els.cinemaStatus) return;
-    els.cinemaStatus.textContent = text;
-    els.cinemaStatus.className = `cinema-status${kind ? ` is-${kind}` : ""}`;
-  }
-
-  function setCinemaRoomImage(raw) {
-    const url = proxiedImage(raw);
-    if (els.cinemaRoomImage) {
-      if (url) {
-        els.cinemaRoomImage.style.display = "";
-        if (els.cinemaRoomImage.src !== url) els.cinemaRoomImage.src = url;
-      } else {
-        els.cinemaRoomImage.removeAttribute("src");
-        els.cinemaRoomImage.style.display = "none";
-      }
-    }
-    els.cinemaEmpty?.classList.toggle("hidden", Boolean(url));
-  }
-
-  function resetCinemaMessages(text) {
-    if (!els.cinemaMessages) return;
-    els.cinemaMessages.replaceChildren();
-    const empty = document.createElement("div");
-    empty.id = "cinemaChatEmpty";
-    empty.className = "cinema-chat-empty";
-    empty.textContent = text || "Conectando ao chat...";
-    els.cinemaMessages.appendChild(empty);
-  }
-
-  function appendCinemaChat(message) {
-    if (!els.cinemaMessages || !message) return;
-    const empty = els.cinemaMessages.querySelector(".cinema-chat-empty");
-    if (empty) empty.remove();
-
-    const item = document.createElement("div");
-    item.className = `cinema-message${message.action ? " is-action" : ""}`;
-    const time = document.createElement("span");
-    time.className = "cinema-msg-time";
-    time.textContent = message.horario || timeOf(message.at);
-    const nick = document.createElement("span");
-    nick.className = "cinema-msg-nick";
-    nick.textContent = message.nick || "AlguÃ©m";
-    const text = document.createElement("span");
-    text.className = "cinema-msg-text";
-    text.textContent = message.mensagem || "";
-    item.append(time, nick, text);
-
-    const nearBottom =
-      els.cinemaMessages.scrollHeight - els.cinemaMessages.scrollTop - els.cinemaMessages.clientHeight < 90;
-    els.cinemaMessages.appendChild(item);
-    while (els.cinemaMessages.querySelectorAll(".cinema-message").length > 120) {
-      els.cinemaMessages.querySelector(".cinema-message")?.remove();
-    }
-    cinema.chatCount += 1;
-    if (els.cinemaChatCount) els.cinemaChatCount.textContent = String(cinema.chatCount);
-    if (nearBottom) els.cinemaMessages.scrollTop = els.cinemaMessages.scrollHeight;
-  }
-
-  function removeCinemaOccupant(cid) {
-    const id = String(cid || "");
-    if (!id || !els.cinemaAvatars) return;
-    cinema.occupants.delete(id);
-    for (const child of [...els.cinemaAvatars.children]) {
-      if (child.dataset.cid === id) child.remove();
-    }
-  }
-
-  function appendCinemaAvatar(occupant) {
-    if (!occupant?.cid || !els.cinemaAvatars) return;
-    const cid = String(occupant.cid);
-    const botCid = cinemaBotCid();
-    if (botCid && cid === botCid) return;
-    const existing = [...els.cinemaAvatars.children].find((child) => child.dataset.cid === cid);
-    cinema.occupants.set(cid, occupant);
-    if (existing) return;
-
-    const marker = document.createElement("div");
-    marker.className = "cinema-avatar";
-    marker.dataset.cid = cid;
-    marker.title = occupant.displayName || occupant.username || cid;
-
-    const url = proxiedImage(
-      occupant.lookThumbnail || occupant.lookImage || occupant.avatar || occupant.portrait || ""
-    );
-    const addFallback = () => {
-      const fallback = document.createElement("span");
-      fallback.className = "cinema-avatar-fallback";
-      fallback.textContent = initialsOf(occupant);
-      marker.insertBefore(fallback, marker.firstChild);
-    };
-    if (url) {
-      const img = document.createElement("img");
-      img.src = url;
-      img.alt = occupant.displayName || occupant.username || "avatar";
-      img.loading = "lazy";
-      img.referrerPolicy = "no-referrer";
-      img.addEventListener(
-        "error",
-        () => {
-          img.remove();
-          addFallback();
-        },
-        { once: true }
-      );
-      marker.appendChild(img);
-    } else {
-      addFallback();
-    }
-
-    const name = document.createElement("span");
-    name.className = "cinema-avatar-name";
-    name.textContent = occupant.displayName || occupant.username || cid;
-    marker.appendChild(name);
-    els.cinemaAvatars.appendChild(marker);
-  }
-
-  function renderCinemaOccupants(occupants) {
-    if (!els.cinemaAvatars) return;
-    cinema.occupants.clear();
-    els.cinemaAvatars.replaceChildren();
-    for (const occupant of occupants || []) appendCinemaAvatar(occupant);
-  }
-
-  function startCinemaPanzoom() {
-    stopCinemaPanzoom();
-    if (typeof window.panzoom !== "function" || !els.cinemaStage) return;
-    try {
-      cinema.panzoom = window.panzoom(els.cinemaStage, {
-        maxZoom: 4,
-        minZoom: 0.8,
-        bounds: true,
-        boundsPadding: 0.1,
-        smoothScroll: false,
-      });
-    } catch {
-      cinema.panzoom = null;
-    }
-  }
-
-  function stopCinemaPanzoom() {
-    try {
-      cinema.panzoom?.dispose?.();
-    } catch {
-      /* ignora */
-    }
-    cinema.panzoom = null;
-  }
-
-  function openCinema(room, { mode = "2d" } = {}) {
-    if (!room?.roomId) return;
-    const is3d = mode === "3d";
-    cinema.open = true;
-    cinema.roomId = String(room.roomId);
-    cinema.room = room;
-    cinema.room3d = null;
-    cinema.mode = is3d ? "3d" : "2d";
-    cinema.chatCount = 0;
-    const requestId = cinema.requestId + 1;
-    cinema.requestId = requestId;
-
-    if (els.cinemaTitle) els.cinemaTitle.textContent = roomDisplayName(room);
-    if (els.cinemaWebLink) {
-      const webLink =
-        String(room.webLink || "").trim() ||
-        `https://www.imvu.com/next/chat/room-${cinema.roomId}/`;
-      els.cinemaWebLink.href = webLink;
-    }
-    if (els.cinemaMeta) {
-      els.cinemaMeta.textContent = `#${room.roomId} Â· ${
-        roomTypeOf(room) === "PRIVATE" ? "privada" : "pÃºblica"
-      } Â· ${(room.occupants || []).length || room.total || 0} na sala`;
-    }
-    setCinemaStatus(is3d ? "carregando 3D..." : "conectando...", "");
-    if (els.cinemaChatCount) els.cinemaChatCount.textContent = "0";
-    resetCinemaMessages(is3d ? "Carregando sala 3D..." : "Iniciando observador invisÃ­vel...");
-    if (els.cinemaChatHint) els.cinemaChatHint.textContent = "O bot observa sem entrar na sala.";
-
-    els.cinemaStage?.classList.toggle("hidden", is3d);
-    els.cinema3dWrap?.classList.toggle("hidden", !is3d);
-    if (els.cinemaHint) {
-      els.cinemaHint.textContent = is3d
-        ? "Arraste para orbitar Â· roda para zoom"
-        : "Arraste para mover Â· roda/pinÃ§a para zoom";
-    }
-
-    if (is3d) {
-      window.Cinema3D?.stop();
-      els.cinema3dLoading?.classList.remove("hidden");
-      if (els.cinema3dLoadingText) els.cinema3dLoadingText.textContent = "Carregando sala...";
-      els.cinemaEmpty?.classList.add("hidden");
-    } else {
-      window.Cinema3D?.stop();
-      setCinemaRoomImage(room.image || room.render || room.cover || room.thumbnail || "");
-      renderCinemaOccupants(room.occupants || (state.room?.roomId === room.roomId ? state.occupants : []));
-      setTimeout(startCinemaPanzoom, 80);
-    }
-
-    els.cinemaOverlay?.classList.remove("hidden");
-    els.cinemaModal?.classList.remove("hidden");
-    els.cinemaOverlay?.setAttribute("aria-hidden", "false");
-    els.cinemaModal?.setAttribute("aria-hidden", "false");
-    requestAnimationFrame(() => {
-      els.cinemaModal?.classList.add("is-open");
-      els.cinemaOverlay?.classList.add("is-open");
-    });
-    document.body.style.overflow = "hidden";
-
-    if (is3d) {
-      loadCinema3d(room, requestId);
-    } else {
-      fetch(`${HTTP_BASE}/api/sala-2d/${encodeURIComponent(room.roomId)}`, { cache: "no-store" })
-        .then(async (response) => {
-          const json = await response.json().catch(() => ({}));
-          if (!response.ok || !json?.ok || !json.room) {
-            throw new Error(json?.error || "Sala indisponÃ­vel no momento.");
-          }
-          if (!cinema.open || requestId !== cinema.requestId) return;
-          const data = json.room;
-          cinema.room = data;
-          if (els.cinemaTitle) els.cinemaTitle.textContent = data.name || roomDisplayName(room);
-          if (els.cinemaMeta) {
-            els.cinemaMeta.textContent = `#${data.roomId} Â· ${data.privacyLabel || "â€”"} Â· ${data.occupancy || 0} na sala`;
-          }
-          setCinemaRoomImage(data.image || data.thumbnail || "");
-          renderCinemaOccupants(data.occupants || []);
-          if (!data.chat) {
-            setCinemaStatus("sem chat clÃ¡ssico", "warn");
-            if (els.cinemaChatHint) els.cinemaChatHint.textContent = "Esta sala nÃ£o tem chat clÃ¡ssico.";
-          }
-        })
-        .catch((error) => {
-          if (!cinema.open || requestId !== cinema.requestId) return;
-          setCinemaStatus("imagem indisponÃ­vel", "warn");
-          if (els.cinemaChatHint) els.cinemaChatHint.textContent = error?.message || "NÃ£o foi possÃ­vel carregar a sala 2D.";
-        });
-    }
-
-    if (!wsSend({ type: "cinema_join", roomId: cinema.roomId })) {
-      connect();
-    }
-  }
-
-  async function loadCinema3d(room, requestId) {
-    try {
-      const response = await fetch(`${HTTP_BASE}/api/sala-3d/${encodeURIComponent(room.roomId)}`, {
-        cache: "no-store",
-      });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok || !json?.ok || !json.room) {
-        throw new Error(json?.error || "Sala 3D indisponÃ­vel no momento.");
-      }
-      if (!cinema.open || requestId !== cinema.requestId || cinema.mode !== "3d") return;
-      const data = json.room;
-      cinema.room3d = data;
-      if (els.cinemaTitle) els.cinemaTitle.textContent = data.name || roomDisplayName(room);
-      if (els.cinemaMeta) {
-        els.cinemaMeta.textContent = `#${data.roomId} Â· 3D experimental Â· ${data.assets?.length || 0} objetos Â· ${data.occupants?.length || 0} avatares`;
-      }
-      if (!window.Cinema3D || typeof window.THREE === "undefined") {
-        throw new Error("Three.js nÃ£o carregou. Verifique sua conexÃ£o.");
-      }
-      window.Cinema3D.start(els.cinema3dWrap, data, {
-        imageUrl: proxiedImage,
-        assetUrl: (url) => `${HTTP_BASE}/api/sala-3d/asset?url=${encodeURIComponent(url)}`,
-        onReady: () => {
-          if (!cinema.open || requestId !== cinema.requestId) return;
-          els.cinema3dLoading?.classList.add("hidden");
-          setCinemaStatus("3D experimental", "");
-        },
-        onError: (message) => {
-          if (!cinema.open || requestId !== cinema.requestId) return;
-          if (els.cinema3dLoading) {
-            els.cinema3dLoading.classList.remove("hidden");
-            if (els.cinema3dLoadingText) {
-              els.cinema3dLoadingText.textContent = message || "Falha ao carregar o 3D.";
-            }
-          }
-          setCinemaStatus("3D indisponÃ­vel", "warn");
-        },
-      });
-    } catch (error) {
-      if (!cinema.open || requestId !== cinema.requestId) return;
-      if (els.cinema3dLoading) {
-        els.cinema3dLoading.classList.remove("hidden");
-        if (els.cinema3dLoadingText) {
-          els.cinema3dLoadingText.textContent = error?.message || "NÃ£o foi possÃ­vel carregar a sala 3D.";
-        }
-      }
-      setCinemaStatus("3D indisponÃ­vel", "warn");
-    }
-  }
-
-  function closeCinema() {
-    if (!cinema.open) return;
-    const roomId = cinema.roomId;
-    cinema.open = false;
-    cinema.roomId = "";
-    cinema.room = null;
-    cinema.room3d = null;
-    cinema.mode = "2d";
-    cinema.requestId += 1;
-    cinema.occupants.clear();
-    stopCinemaPanzoom();
-    window.Cinema3D?.stop();
-    els.cinema3dWrap?.classList.add("hidden");
-    els.cinema3dLoading?.classList.add("hidden");
-    els.cinemaStage?.classList.remove("hidden");
-    if (els.cinemaHint) els.cinemaHint.textContent = "Arraste para mover Â· roda/pinÃ§a para zoom";
-    wsSend({ type: "cinema_leave", roomId });
-    els.cinemaModal?.classList.remove("is-open");
-    els.cinemaOverlay?.classList.remove("is-open");
-    els.cinemaModal?.setAttribute("aria-hidden", "true");
-    els.cinemaOverlay?.setAttribute("aria-hidden", "true");
-    setTimeout(() => {
-      if (cinema.open) return;
-      els.cinemaModal?.classList.add("hidden");
-      els.cinemaOverlay?.classList.add("hidden");
-    }, 240);
-    const otherOpen =
-      (els.alertsPanel && !els.alertsPanel.classList.contains("hidden")) || profileModal.open;
-    document.body.style.overflow = otherOpen ? "hidden" : "";
-  }
-
   // ---------------- mensagens do backend ----------------
 
   function handleMessage(message) {
@@ -1529,52 +1166,6 @@
         maybeLocalNotify("IMVU Radar", `${name} saiu da sala`);
         break;
       }
-
-      case "cinema_ready":
-        if (cinema.open && message.roomId === cinema.roomId) {
-          setCinemaStatus(message.chat ? "chat ao vivo" : "sem chat clÃ¡ssico", message.chat ? "" : "warn");
-          if (els.cinemaChatHint) {
-            els.cinemaChatHint.textContent = message.chat
-              ? "O bot observa sem entrar na sala."
-              : "Esta sala nÃ£o tem chat clÃ¡ssico.";
-          }
-          if (els.cinemaMessages) {
-            const empty = els.cinemaMessages.querySelector(".cinema-chat-empty");
-            if (empty) {
-              empty.textContent = message.chat
-                ? "Nenhuma mensagem ainda. O chat aparece aqui em tempo real."
-                : "Esta sala nÃ£o tem chat clÃ¡ssico.";
-            }
-          }
-        }
-        break;
-
-      case "cinema_error":
-        if (cinema.open && message.roomId === cinema.roomId) {
-          setCinemaStatus("chat indisponÃ­vel", "error");
-          if (els.cinemaChatHint) els.cinemaChatHint.textContent = message.message || "Falha ao observar o chat.";
-          appendCinemaChat({
-            nick: "Radar",
-            mensagem: message.message || "Falha ao observar o chat.",
-            horario: timeOf(Date.now()),
-          });
-        }
-        break;
-
-      case "cinema_chat":
-        if (cinema.open && message.roomId === cinema.roomId) appendCinemaChat(message);
-        break;
-
-      case "cinema_occupant_join":
-        if (cinema.open && message.roomId === cinema.roomId && message.occupant) {
-          appendCinemaAvatar(message.occupant);
-        }
-        break;
-
-      case "cinema_occupant_leave":
-        if (cinema.open && message.roomId === cinema.roomId) removeCinemaOccupant(message.cid);
-        break;
-
       case "error":
         setStatus("error", message.message || "Erro no rastreamento");
         renderRoomsState();
@@ -1872,18 +1463,6 @@
 
       const actions = document.createElement("div");
       actions.className = "room-card-actions";
-      const cinemaBtn = document.createElement("button");
-      cinemaBtn.type = "button";
-      cinemaBtn.className = "btn-ghost room-card-btn room-cinema-btn";
-      cinemaBtn.dataset.roomId = roomId;
-      cinemaBtn.textContent = "Assistir Sala";
-      actions.appendChild(cinemaBtn);
-      const cinema3dBtn = document.createElement("button");
-      cinema3dBtn.type = "button";
-      cinema3dBtn.className = "btn-ghost room-card-btn room-cinema3d-btn";
-      cinema3dBtn.dataset.roomId = roomId;
-      cinema3dBtn.textContent = "Ver em 3D";
-      actions.appendChild(cinema3dBtn);
       if (directLink) {
         const open = document.createElement("a");
         open.className = "btn-primary room-card-btn";
@@ -2261,18 +1840,6 @@
   });
 
   els.roomsList?.addEventListener("click", (event) => {
-    const cinema3dBtn = event.target.closest(".room-cinema3d-btn");
-    if (cinema3dBtn) {
-      const room = state.rooms.find((item) => item.roomId === cinema3dBtn.dataset.roomId);
-      if (room) openCinema(room, { mode: "3d" });
-      return;
-    }
-    const cinemaBtn = event.target.closest(".room-cinema-btn");
-    if (cinemaBtn) {
-      const room = state.rooms.find((item) => item.roomId === cinemaBtn.dataset.roomId);
-      if (room) openCinema(room);
-      return;
-    }
     const button = event.target.closest(".room-copy-btn");
     if (!button) return;
     copyText(button.dataset.link || "", "Link copiado");
@@ -2286,19 +1853,8 @@
   els.profileCopyBtn?.addEventListener("click", () => {
     copyText(els.profileCopyBtn.dataset.link || "", "Link do perfil copiado");
   });
-  els.cinemaCloseBtn?.addEventListener("click", closeCinema);
-  els.cinemaOverlay?.addEventListener("click", closeCinema);
-  els.cinemaRoomImage?.addEventListener("error", () => {
-    if (!cinema.open) return;
-    els.cinemaRoomImage.style.display = "none";
-    els.cinemaEmpty?.classList.remove("hidden");
-  });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (cinema.open) {
-      closeCinema();
-      return;
-    }
     if (profileModal.open) {
       closeProfileModal();
       return;
