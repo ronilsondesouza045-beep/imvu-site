@@ -72,6 +72,57 @@ function meshSceneModel(scene) {
   };
 }
 
+// Skeleton do shell: a câmera real do IMVU é um bone (camera.01.01.root),
+// com alvo em camera.01.01.root.Target. A pose relativa é a mesma usada pelo client.
+function quatMultiply(a, b) {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+  return [
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+    aw * bw - ax * bx - ay * by - az * bz,
+  ];
+}
+
+function quatRotate(q, v) {
+  const [x, y, z, w] = q;
+  const [vx, vy, vz] = v;
+  const ix = w * vx + y * vz - z * vy;
+  const iy = w * vy + z * vx - x * vz;
+  const iz = w * vz + x * vy - y * vx;
+  const iw = -x * vx - y * vy - z * vz;
+  return [
+    ix * w + iw * -x + iy * -z - iz * -y,
+    iy * w + iw * -y + iz * -x - ix * -z,
+    iz * w + iw * -z + ix * -y - iy * -x,
+  ];
+}
+
+function boneWorldTransform(bones, index, cache) {
+  if (cache.has(index)) return cache.get(index);
+  const bone = bones[index] || {};
+  const relative = bone.relativeTransform || {};
+  const rotation = Array.isArray(relative.rotation) ? relative.rotation : [0, 0, 0, 1];
+  const position = Array.isArray(relative.translation) ? relative.translation : [0, 0, 0];
+  const parentIndex = Number.isInteger(bone.parentIndex) ? bone.parentIndex : -1;
+  let world = { rotation, position };
+  if (parentIndex >= 0 && parentIndex < bones.length && parentIndex !== index) {
+    const parent = boneWorldTransform(bones, parentIndex, cache);
+    const rotated = quatRotate(parent.rotation, position);
+    world = {
+      rotation: quatMultiply(parent.rotation, rotation),
+      position: [
+        parent.position[0] + rotated[0],
+        parent.position[1] + rotated[1],
+        parent.position[2] + rotated[2],
+      ],
+    };
+  }
+  cache.set(index, world);
+  return world;
+}
+
 function roomIdFromUrl(value) {
   const m = /room-(\d+-\d+)\s*$/.exec(String(value || ""));
   return m ? m[1] : "";
@@ -465,6 +516,36 @@ export class ImvuApi {
     return profile;
   }
 
+  /** Extrai a câmera real do shell a partir do skeleton JSON do IMVU. */
+  async shellCamera(scene) {
+    const object = scene?.objects?.[0] || {};
+    const cameraDef = Array.isArray(object.cameras) ? object.cameras[0] : null;
+    const skeletonUrl = normalizeUrl(object?.skeleton?.url || "");
+    if (!cameraDef?.bone || !skeletonUrl) return null;
+    const skeleton = await this.fetchAssetJson(skeletonUrl).catch(() => null);
+    const bones = Array.isArray(skeleton?.bones) ? skeleton.bones : [];
+    if (!bones.length) return null;
+    const cameraIndex = bones.findIndex((bone) => bone?.name === cameraDef.bone);
+    if (cameraIndex < 0) return null;
+    const targetIndex = bones.findIndex(
+      (bone) => bone?.name === `${cameraDef.bone}.Target`
+    );
+    const cache = new Map();
+    const camera = boneWorldTransform(bones, cameraIndex, cache);
+    const target = targetIndex >= 0 ? boneWorldTransform(bones, targetIndex, cache) : null;
+    return {
+      position: camera.position,
+      target: target?.position || [
+        camera.position[0],
+        camera.position[1],
+        camera.position[2] - 5,
+      ],
+      fov: Number(cameraDef.fovY) || 45,
+      near: Number(cameraDef.nearZ) || 0.3,
+      far: Number(cameraDef.farZ) || 1000,
+    };
+  }
+
   /** Baixa e cacheia um scene JSON de asset do IMVU (room/furniture). */
   async fetchAssetJson(url, ttl = 10 * 60_000) {
     const key = String(url || "");
@@ -600,6 +681,7 @@ export class ImvuApi {
     const shellSceneUrl = normalizeUrl(shellData.asset_url || sceneData.room_asset_url || "");
     const shellScene = shellSceneUrl ? await this.fetchAssetJson(shellSceneUrl).catch(() => null) : null;
     const shellModel = shellScene ? meshSceneModel(shellScene) : null;
+    const shellCamera = shellScene ? await this.shellCamera(shellScene).catch(() => null) : null;
 
     const assetUrls = [
       ...new Set(furniture.map((item) => normalizeUrl(item.assetUrl)).filter(Boolean)),
@@ -679,6 +761,7 @@ export class ImvuApi {
         assetUrl: shellSceneUrl,
         sceneUrl: normalizeUrl(shellData.scene_url || ""),
         model: shellModel,
+        camera: shellCamera,
       },
       scene: {
         roomAssetUrl: normalizeUrl(sceneData.room_asset_url || ""),
