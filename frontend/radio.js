@@ -14,8 +14,8 @@
     radioView: $("#radioView"),
     tabRadar: $("#tabRadar"),
     tabRadio: $("#tabRadio"),
-    maintenance: $("#radioMaintenance"),
-    maintenanceText: $("#radioMaintenanceText"),
+    streamInput: $("#radioStreamInput"),
+    copyStreamBtn: $("#radioCopyStreamBtn"),
     adminWarning: $("#radioAdminWarning"),
     radioGrid: $("#radioGrid"),
     form: $("#radioForm"),
@@ -44,7 +44,6 @@
   let pollTimer = null;
   let joining = false;
   let lastStatus = null;
-  let maintenanceActive = false;
 
   function radioToast(title, detail = "", kind = "info") {
     if (!els.toasts) return;
@@ -121,29 +120,6 @@
     }
   }
 
-  function renderMaintenance(active) {
-    maintenanceActive = active;
-    els.maintenance?.classList.toggle("hidden", !active);
-    els.radioGrid?.classList.toggle("hidden", active);
-    els.adminWarning?.classList.toggle("hidden", active);
-
-    if (active) {
-      disableSongForm(true);
-      if (els.roomInput) els.roomInput.disabled = true;
-      if (els.joinBtn) els.joinBtn.disabled = true;
-      els.disconnectBtn?.classList.add("hidden");
-      showError("");
-      setStatus("idle", "Em manutenção");
-      if (els.maintenanceText) {
-        els.maintenanceText.textContent =
-          "Estamos melhorando o sistema de música. O DJ Bot voltará no dia 23!";
-      }
-    } else {
-      if (els.roomInput) els.roomInput.disabled = false;
-      if (els.joinBtn) els.joinBtn.disabled = false;
-    }
-  }
-
   function renderRadioDetails(status) {
     els.roomName.textContent = status.roomName || "Sala";
     els.roomId.textContent = status.roomId || "—";
@@ -158,6 +134,10 @@
       els.link.classList.toggle("hidden", !link);
     }
 
+    const streamUrl = String(status.radioUrl || `${HTTP_BASE}/radio.mp3`).trim();
+    if (els.streamInput) els.streamInput.value = streamUrl;
+    if (els.copyStreamBtn) els.copyStreamBtn.dataset.link = streamUrl;
+
     if (els.queue) {
       const count = Array.isArray(status.queue) ? status.queue.length : 0;
       els.queue.textContent = count
@@ -169,7 +149,7 @@
   }
 
   function renderStatus(status) {
-    if (!status || maintenanceActive) return;
+    if (!status) return;
     lastStatus = status;
 
     if (Number(status.sendIntervalMs) >= 1500) {
@@ -224,14 +204,6 @@
 
   async function fetchStatus({ silent = false } = {}) {
     try {
-      const systemResponse = await fetch(`${HTTP_BASE}/api/status`, { cache: "no-store" });
-      const system = await systemResponse.json().catch(() => null);
-      if (system?.maintenance) {
-        renderMaintenance(true);
-        return null;
-      }
-      renderMaintenance(false);
-
       const response = await fetch(`${HTTP_BASE}/api/bot/status`, { cache: "no-store" });
       const json = await response.json().catch(() => null);
       if (!response.ok || !json?.status) {
@@ -251,12 +223,6 @@
   async function joinBot(event) {
     event?.preventDefault?.();
     if (joining) return;
-    if (maintenanceActive) {
-      showError("O bot de música está em manutenção. Voltamos dia 23!");
-      radioToast("Rádio em manutenção", "O DJ Bot voltará no dia 23!", "warn");
-      return;
-    }
-
     const raw = String(els.roomInput?.value || "").trim();
     const match = raw.match(/(\d+-\d+)/);
     const roomId = match ? match[1] : raw;
@@ -345,11 +311,6 @@
 
   async function requestSong(event) {
     event?.preventDefault?.();
-    if (maintenanceActive) {
-      showError("O bot de música está em manutenção. Voltamos dia 23!");
-      radioToast("Rádio em manutenção", "O DJ Bot voltará no dia 23!", "warn");
-      return;
-    }
     if (!lastStatus?.connected) {
       showError("Ative o DJ Bot na sua sala antes de pedir música.");
       radioToast("Ative o bot primeiro", "O bot precisa estar na sala para tocar.", "warn");
@@ -424,6 +385,15 @@
   els.form?.addEventListener("submit", joinBot);
   els.songForm?.addEventListener("submit", requestSong);
   els.disconnectBtn?.addEventListener("click", leaveBot);
+  els.copyStreamBtn?.addEventListener("click", async () => {
+    const link = els.copyStreamBtn.dataset.link || `${HTTP_BASE}/radio.mp3`;
+    try {
+      await navigator.clipboard.writeText(link);
+      radioToast("Link copiado", link, "success");
+    } catch {
+      radioToast("Copie o link do rádio", link, "warn");
+    }
+  });
 
   try {
     const saved = localStorage.getItem("radar:radioRoom");

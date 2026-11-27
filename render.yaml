@@ -1,4 +1,4 @@
-services:
+﻿services:
   - type: web
     name: imvu-radar-backend
     runtime: node
@@ -32,8 +32,6 @@ services:
       - key: BOT_USERNAME
         sync: false
       - key: BOT_ALLOW_SAME_ACCOUNT
-        sync: false
-      - key: BOT_MAINTENANCE
         sync: false
       - key: BOT_SEND_INTERVAL_MS
         value: "1500"

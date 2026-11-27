@@ -221,21 +221,14 @@
         <section class="radio-hero">
           <span class="eyebrow">DJ Bot · IMVU</span>
           <h1 class="font-display">Música na sua sala.</h1>
-          <p>Ative o bot, dê Admin a ele e peça QUALQUER música. O bot busca no YouTube e toca a fila na sala.</p>
+          <p>Ative o bot, dê Moderador a ele e peça QUALQUER música. O bot busca no YouTube e toca a fila na sala.</p>
         </section>
 
-        <section id="radioMaintenance" class="radio-maintenance hidden" role="status" aria-live="polite">
-          <div class="radio-maintenance-icon" aria-hidden="true">🛠️</div>
-          <h2 class="font-display">🛠️ Rádio em Manutenção</h2>
-          <p id="radioMaintenanceText">Estamos melhorando o sistema de música. O DJ Bot voltará no dia 23!</p>
-        </section>
-
-        <section id="radioAdminWarning" class="radio-admin-warning" role="note" aria-label="Aviso de permissão de Admin">
+        <section id="radioAdminWarning" class="radio-admin-warning" role="note" aria-label="Instruções do DJ">
           <div class="radio-admin-warning-icon" aria-hidden="true">!</div>
           <div>
-            <strong>⚠️ ATENÇÃO: o IMVU não tem "Admin". O Host é o dono da sala — você não consegue promover o bot a Host.</strong>
-            <p><b>O que existe:</b> adicionar o bot como <b>Moderador</b> em My Rooms &gt; sala &gt; engrenagem &gt; Settings &gt; Choose Moderators (Classic: Chat Rooms &gt; Manage &gt; Edit &gt; Room Moderators). Mas a API do rádio está negando controle automático para moderador.</p>
-            <p><b>Para tocar automático:</b> use a conta dona da sala como conta do bot (BOT_USERNAME = dono) ou uma sala que o próprio bot seja dono. Senão, copie o link MP3 em Media &gt; Radio Streaming &gt; Load.</p>
+            <strong>Como tocar na sua sala</strong>
+            <p>Copie o link, cole no <b>Rádio da sua sala</b> no IMVU, dê <b>Moderador</b> para o bot e digite <code>!play</code> no chat.</p>
           </div>
         </section>
 
@@ -348,6 +341,20 @@
                 <div class="eyebrow-sm">Tocando agora</div>
                 <div id="radioNow" class="radio-now-name">—</div>
                 <a id="radioLink" class="radio-link" href="#" target="_blank" rel="noopener">—</a>
+              </div>
+              <div class="radio-kv">
+                <span>Link do rádio</span>
+                <div class="radio-link-row">
+                  <input
+                    id="radioStreamInput"
+                    class="radio-input mono"
+                    type="text"
+                    readonly
+                    value=""
+                    aria-label="Link do rádio"
+                  />
+                  <button id="radioCopyStreamBtn" class="btn-ghost" type="button">Copiar</button>
+                </div>
               </div>
               <button id="radioDisconnectBtn" class="btn-ghost mt-4 w-full hidden" type="button">
                 Desconectar bot

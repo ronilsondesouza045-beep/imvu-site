@@ -32,8 +32,7 @@ const MIN_SEND_INTERVAL_MS = Math.max(
 const COMMAND_COOLDOWN_MS = 2_500;
 const MAX_PENDING_MESSAGES = 12;
 const MAX_QUEUE = 30;
-const ADMIN_WARNING =
-  "⚠️ O IMVU não libera o rádio para Moderador. A conta do bot precisa ser a dona da sala (Host) ou uma sala que o próprio bot seja dono. Copie este link no rádio:";
+const ADMIN_WARNING = "🎧 Copie o link, cole no Rádio da sua sala no IMVU, dê Moderador para o bot e digite !play no chat. Link:";
 
 const mediaPlayerSong = (song) =>
   song
@@ -395,7 +394,7 @@ class MusicBot {
       radioStream.queueLength(this.roomId) === 0 && !radioStream.currentSong(this.roomId);
 
     radioStream.enqueue(this.roomId, song);
-    await this.sendChat(`🎵 Adicionado à fila: ${song.title}`);
+    await this.sendChat(`🎵 Adicionado: ${song.title}. Ouça em: ${radioStream.publicUrl()}`);
 
     let streamUrl = this.streamUrl;
     let warning = this.radioWarning;
@@ -416,7 +415,7 @@ class MusicBot {
         this.radioWarning = error?.message || String(error);
         warning = this.radioWarning;
         this.lastError = this.radioWarning;
-        await this.sendChat(`${ADMIN_WARNING} ${streamUrl}`);
+        await this.sendChat(`${ADMIN_WARNING} ${radioStream.publicUrl()}`);
       }
     } else if (!this.streamUrl) {
       // A fila já existia, mas o player ainda não tinha sido configurado.

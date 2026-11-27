@@ -2777,3 +2777,20 @@ kbd {
   text-decoration: none;
 }
 
+
+.radio-link-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.radio-link-row .radio-input {
+  flex: 1;
+  min-width: 0;
+}
+.radio-link-row .btn-ghost {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+

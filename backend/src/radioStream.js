@@ -66,6 +66,11 @@ class RadioStream extends EventEmitter {
     return `${PUBLIC_BASE}/api/radio/${encodeURIComponent(id)}/${this.tokenFor(id)}.mp3${query}`;
   }
 
+  /** Link público único do stream (o que o usuário cola no rádio do IMVU). */
+  publicUrl() {
+    return `${PUBLIC_BASE}/radio.mp3`;
+  }
+
   verifyToken(roomId, token) {
     const expected = Buffer.from(this.tokenFor(roomId));
     const received = Buffer.from(clean(token));
@@ -287,6 +292,10 @@ class RadioStream extends EventEmitter {
       return;
     }
 
+    this.serve(room, res);
+  }
+
+  serve(room, res) {
     res.writeHead(200, {
       "Content-Type": "audio/mpeg",
       "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -303,6 +312,23 @@ class RadioStream extends EventEmitter {
     res.on("error", cleanup);
 
     if (!room.playing) void this.pump(room);
+  }
+
+  /** /radio.mp3: stream público da sala atual do bot, sem token. */
+  handlePublicRequest(req, res, roomId) {
+    const id = clean(roomId);
+    if (!/^\d+-\d+$/.test(id)) {
+      res.statusCode = 400;
+      res.end("invalid room");
+      return;
+    }
+    const room = this.rooms.get(id);
+    if (!room || (!room.current && room.queue.length === 0)) {
+      res.statusCode = 404;
+      res.end("off air");
+      return;
+    }
+    this.serve(room, res);
   }
 
   shutdown() {
