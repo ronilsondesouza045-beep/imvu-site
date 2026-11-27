@@ -123,11 +123,17 @@
       const life = { cancelled: false };
       let pending = 0;
       let finished = false;
+      let ready = false;
       let meshCount = 0;
+      const notifyReady = () => {
+        if (ready || life.cancelled) return;
+        ready = true;
+        options.onReady?.();
+      };
       const finish = () => {
         if (finished || life.cancelled) return;
         finished = true;
-        options.onReady?.();
+        notifyReady();
       };
       const task = () => {
         pending += 1;
@@ -332,7 +338,10 @@
         scene.add(shellGroup);
         loadMeshGroups(shellGroups, shellGroup, {
           forceDoubleSide: true,
-          onLoaded: hidePlaceholders,
+          onLoaded: () => {
+            hidePlaceholders();
+            notifyReady();
+          },
         });
       }
 
@@ -520,7 +529,7 @@
       };
 
       window.Cinema3D.debug = () => ({
-        ready: true,
+        ready,
         assets: ctx?.assets || 0,
         avatars: ctx?.avatars || 0,
         meshes: ctx?.getMeshCount?.() || 0,
