@@ -533,6 +533,14 @@ export class ImvuApi {
     const cache = new Map();
     const camera = boneWorldTransform(bones, cameraIndex, cache);
     const target = targetIndex >= 0 ? boneWorldTransform(bones, targetIndex, cache) : null;
+    const seats = {};
+    for (let i = 0; i < bones.length; i += 1) {
+      const match = /^Seat0*(\d+)\./.exec(String(bones[i]?.name || ""));
+      if (!match) continue;
+      const seatNumber = Number(match[1]);
+      if (!Number.isFinite(seatNumber) || seats[seatNumber]) continue;
+      seats[seatNumber] = boneWorldTransform(bones, i, cache).position;
+    }
     return {
       position: camera.position,
       target: target?.position || [
@@ -543,6 +551,7 @@ export class ImvuApi {
       fov: Number(cameraDef.fovY) || 45,
       near: Number(cameraDef.nearZ) || 0.3,
       far: Number(cameraDef.farZ) || 1000,
+      seats,
     };
   }
 

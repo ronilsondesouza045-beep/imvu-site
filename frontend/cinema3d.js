@@ -102,7 +102,13 @@
       material.color.set(0x6b7280);
     }
     if (def?.selfIlluminated) {
-      material.emissive = new THREE.Color(0x2a2a2a);
+      if (texture) {
+        material.emissiveMap = texture;
+        material.emissive = new THREE.Color(0xffffff);
+        material.emissiveIntensity = 0.65;
+      } else {
+        material.emissive = new THREE.Color(0x2a2a2a);
+      }
     }
     return material;
   }
@@ -184,8 +190,8 @@
       const roomDepth = Math.max(18, Number(bounds.maxZ) - Number(bounds.minZ) + 14);
       const backdropZ = Number(bounds.minZ) - 3;
 
-      camera.position.set(centerX, 15, Number(bounds.maxZ) + 22);
-      camera.lookAt(centerX, 2, centerZ);
+      camera.position.set(centerX, 1.85, centerZ + 3.2);
+      camera.lookAt(centerX, 1.35, centerZ);
 
       const ambient = Array.isArray(env.ambientColor)
         ? new THREE.Color(env.ambientColor[0], env.ambientColor[1], env.ambientColor[2])
@@ -240,6 +246,88 @@
         backdrop.visible = false;
       };
 
+      let controls = null;
+      let shellRoot = null;
+      const furnitureGroups = [];
+      const avatarSprites = [];
+      // Enquadra a câmera pelo box real do shell e reposiciona os avatares
+      // para dentro da sala. O bounds dos móveis é pequeno demais para a sala.
+      const frameRoom = (shellGroup) => {
+        if (life.cancelled || !shellGroup) return;
+        const box = new THREE.Box3().setFromObject(shellGroup);
+        if (box.isEmpty()) return;
+        const size = box.getSize(new THREE.Vector3());
+        const sceneCamera = room.shell?.camera;
+        if (
+          Array.isArray(sceneCamera?.position) &&
+          Array.isArray(sceneCamera?.target)
+        ) {
+          const scenePosition = new THREE.Vector3(
+            Number(sceneCamera.position[0]) || 0,
+            Number(sceneCamera.position[1]) || 0,
+            Number(sceneCamera.position[2]) || 0
+          );
+          const roomCenter = new THREE.Vector3(centerX, 1.15, centerZ);
+          const offset = new THREE.Vector3().subVectors(scenePosition, roomCenter);
+          offset.y = 0;
+          if (offset.lengthSq() < 1e-4) offset.set(0, 0, 1);
+          offset.normalize().multiplyScalar(
+            Math.max(8, scenePosition.distanceTo(roomCenter) + 4)
+          );
+          const overview = roomCenter.clone().add(offset);
+          overview.y = 3.6;
+          camera.position.copy(overview);
+          camera.fov = Number(sceneCamera.fov) || 45;
+          camera.near = Math.max(0.05, Number(sceneCamera.near) || 0.3);
+          camera.far = Math.max(500, Number(sceneCamera.far) || 1000);
+          camera.updateProjectionMatrix();
+          const target = roomCenter;
+          if (controls) {
+            controls.target.copy(target);
+            controls.minDistance = 1.5;
+            controls.maxDistance = 100;
+            controls.update();
+          } else {
+            camera.lookAt(target);
+          }
+        } else {
+          const inset = Math.min(1.2, Math.max(0.35, Number(size.z) * 0.08));
+          const eyeZ = box.max.z - inset;
+          camera.position.set(centerX, 1.85, eyeZ);
+          if (controls) {
+            controls.target.set(centerX, 1.35, centerZ);
+            controls.minDistance = 1.2;
+            controls.maxDistance = 120;
+            controls.update();
+          } else {
+            camera.lookAt(centerX, 1.35, centerZ);
+          }
+        }
+        const fallbackZ = Math.min(
+          box.max.z - 1.4,
+          Math.max(centerZ + 1.1, box.min.z + 2.2)
+        );
+        const seats = sceneCamera.seats || {};
+        avatarSprites.forEach((sprite, index) => {
+          const occupant = sprite.userData?.occupant || {};
+          const seat = seats[String(Number(occupant.seatNumber) || 0)];
+          if (Array.isArray(seat) && seat.length >= 3) {
+            sprite.position.set(
+              Number(seat[0]) || 0,
+              (Number(seat[1]) || 0) + 1.6,
+              Number(seat[2]) || 0
+            );
+            return;
+          }
+          const spread = 1.7;
+          sprite.position.set(
+            centerX + (index - (avatarSprites.length - 1) / 2) * spread,
+            2.1,
+            fallbackZ
+          );
+        });
+      };
+
       // Fila de meshes (evita 60 downloads simultaneos de JSON grande).
       let activeMeshes = 0;
       const meshQueue = [];
@@ -288,7 +376,6 @@
       const loadMeshGroups = (groups, parent, { forceDoubleSide = false, onLoaded = null } = {}) => {
         const list = Array.isArray(groups) ? groups : [];
         if (!list.length) return false;
-        let loadedAny = false;
         for (const group of list) {
           if (!group?.meshUrl) continue;
           task();
@@ -321,10 +408,7 @@
                 if (def?.textureUrl) loadTexture(def.textureUrl, addMesh);
                 else addMesh(null);
               }
-              if (!loadedAny) {
-                loadedAny = true;
-                onLoaded?.();
-              }
+              onLoaded?.();
             } catch {
               /* placeholder permanece */
             } finally {
@@ -340,11 +424,12 @@
       if (shellGroups.length) {
         const shellGroup = new THREE.Group();
         shellGroup.name = "imvu-shell";
+        shellRoot = shellGroup;
         scene.add(shellGroup);
         loadMeshGroups(shellGroups, shellGroup, {
-          forceDoubleSide: true,
           onLoaded: () => {
             hidePlaceholders();
+            frameRoom(shellGroup);
             notifyReady();
           },
         });
@@ -407,6 +492,7 @@
           modelGroup.rotation.set(Number(pitch) || 0, Number(yaw) || 0, Number(roll) || 0);
           modelGroup.scale.setScalar(scale);
           scene.add(modelGroup);
+          furnitureGroups.push(modelGroup);
           loadMeshGroups(asset.model.meshGroups, modelGroup, {
             onLoaded: removePlaceholder,
           });
@@ -418,6 +504,7 @@
           externalGroup.rotation.set(Number(pitch) || 0, Number(yaw) || 0, Number(roll) || 0);
           externalGroup.scale.setScalar(scale);
           scene.add(externalGroup);
+          furnitureGroups.push(externalGroup);
           task();
           const finishModel = (object) => {
             if (life.cancelled) {
@@ -448,7 +535,7 @@
       }
 
       const occupants = Array.isArray(room.occupants) ? room.occupants : [];
-      const avatarZ = Number(bounds.maxZ) + 4;
+      const avatarZ = centerZ + 1.1;
       occupants.forEach((occupant, index) => {
         const px = centerX + (index - (occupants.length - 1) / 2) * 3.6;
         const addSprite = (texture) => {
@@ -459,12 +546,13 @@
             depthWrite: false,
           });
           const sprite = new THREE.Sprite(spriteMaterial);
-          sprite.position.set(px, 2.3, avatarZ);
+          sprite.position.set(px, 2.1, avatarZ);
           sprite.scale.set(3.2, 4.2, 1);
           sprite.userData = {
             name: String(occupant.displayName || occupant.username || "Avatar"),
             occupant,
           };
+          avatarSprites.push(sprite);
           scene.add(sprite);
         };
         const src =
@@ -488,12 +576,12 @@
         }
       });
 
-      const controls = new THREE.OrbitControls(camera, renderer.domElement);
-      controls.target.set(centerX, 2, centerZ);
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.target.set(centerX, 1.35, centerZ);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
-      controls.minDistance = 6;
-      controls.maxDistance = 90;
+      controls.minDistance = 1.2;
+      controls.maxDistance = 120;
       controls.maxPolarAngle = Math.PI / 2.05;
       controls.update();
 
@@ -531,7 +619,10 @@
         avatars: occupants.length,
         getMeshCount: () => meshCount,
         getAnimationId: () => animationId,
+        shellGroup: shellRoot,
+        furnitureGroups,
       };
+      window.Cinema3D.__ctx = ctx;
 
       window.Cinema3D.debug = () => ({
         ready,
@@ -556,10 +647,12 @@
   function stop() {
     if (!ctx) {
       window.Cinema3D.debug = emptyDebug;
+      window.Cinema3D.__ctx = null;
       return;
     }
     const current = ctx;
     ctx = null;
+    window.Cinema3D.__ctx = null;
     if (current.life) current.life.cancelled = true;
     try {
       cancelAnimationFrame(current.getAnimationId());
