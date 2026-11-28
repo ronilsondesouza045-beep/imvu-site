@@ -608,14 +608,48 @@ export class RadarTracker {
       `[IMQ] ${track.nick} (${track.cid}): aguardando evento de sala (${IMQ_GRACE_MS / 1000}s)`
     );
 
-    if (await this.waitForImqRoom(track, IMQ_GRACE_MS)) {
-      if (!active()) return;
+    const imqWaiting = this.waitForImqRoom(track, IMQ_GRACE_MS);
+    // Sonda barata em paralelo: current_room e 1 request e resolve o caso
+    // comum sem esperar os 10s nem tocar na varredura publica.
+    const relationPromise = this.api.currentRoom(track.cid, 0).catch(() => "");
+
+    const first = await Promise.race([
+      imqWaiting.then((found) => ({ fromImq: true, found })),
+      relationPromise.then((rid) => ({ fromImq: false, rid })),
+    ]);
+    if (!active()) return;
+
+    if (first.fromImq && first.found) {
       const elapsed = now() - (track.imqWatchStartedAt || track.createdAt || now());
       this.log.info(
         `[IMQ] ${track.nick}: sala ${track.room?.roomId || ""} detectada em ${elapsed}ms; varredura publica cancelada`
       );
       this.scheduleBackgroundDiscovery(track, gen);
       return;
+    }
+
+    if (!first.fromImq && first.rid && first.rid !== `${track.cid}-1`) {
+      this.log.info(
+        `[IMQ] ${track.nick}: IMQ silencioso; current_room respondeu ${first.rid} em ${
+          now() - (track.imqWatchStartedAt || now())
+        }ms`
+      );
+      await this.setRoom(track, first.rid, { via: "user_relation", gen });
+      this.scheduleBackgroundDiscovery(track, gen);
+      return;
+    }
+
+    if (!first.fromImq) {
+      // Relation vazia ou presa na My Room: o IMQ ainda tem o resto da janela.
+      if (await imqWaiting) {
+        if (!active()) return;
+        const elapsed = now() - (track.imqWatchStartedAt || track.createdAt || now());
+        this.log.info(
+          `[IMQ] ${track.nick}: sala ${track.room?.roomId || ""} detectada em ${elapsed}ms; varredura publica cancelada`
+        );
+        this.scheduleBackgroundDiscovery(track, gen);
+        return;
+      }
     }
     if (!active()) return;
 
