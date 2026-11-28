@@ -1,6 +1,6 @@
 ﻿/* IMVU Radar - service worker: cache do app + Web Push */
 
-const CACHE_NAME = 'imvu-radar-v1';
+const CACHE_NAME = 'imvu-radar-v2';
 const urlsToCache = [
   '/imvu-site/',
   '/imvu-site/index.html',

@@ -46,6 +46,16 @@
       </div>
 
       <div class="flex items-center gap-2">
+        <button
+          id="btn-instalar-pwa"
+          type="button"
+          style="display: none"
+          aria-label="Instalar aplicativo IMVU Radar"
+          title="Instalar aplicativo"
+        >
+          <span aria-hidden="true">📲</span>
+          <span class="pwa-install-label">Instalar Aplicativo</span>
+        </button>
         <button id="alertsBtn" class="bell-btn" type="button" aria-label="Abrir alertas" title="Alertas">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
@@ -486,6 +496,44 @@
             .catch(err => console.error('Erro ao registrar:', err));
         });
       }
+
+      (() => {
+        const installBtn = document.getElementById('btn-instalar-pwa');
+        if (!installBtn) return;
+
+        let deferredPrompt = null;
+
+        const isStandalone = () =>
+          window.matchMedia('(display-mode: standalone)').matches ||
+          window.navigator.standalone === true;
+
+        const showInstall = () => {
+          installBtn.style.display = 'inline-flex';
+        };
+        const hideInstall = () => {
+          installBtn.style.display = 'none';
+        };
+
+        window.addEventListener('beforeinstallprompt', (event) => {
+          event.preventDefault();
+          deferredPrompt = event;
+          if (!isStandalone()) showInstall();
+        });
+
+        installBtn.addEventListener('click', async () => {
+          if (!deferredPrompt) return;
+          deferredPrompt.prompt();
+          const { outcome } = await deferredPrompt.userChoice;
+          console.log(outcome === 'accepted' ? 'PWA instalado!' : 'Instalação recusada.');
+          deferredPrompt = null;
+          hideInstall();
+        });
+
+        window.addEventListener('appinstalled', () => {
+          deferredPrompt = null;
+          hideInstall();
+        });
+      })();
     </script>
   </body>
 </html>
