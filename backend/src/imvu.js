@@ -767,7 +767,8 @@ export class ImvuApi {
         if (!existing.name || existing.name === "Look atual") {
           existing.name = def.name || existing.name;
         }
-        existing.image_urls = [...new Set([...existing.image_urls, ...def.image_urls])];
+        // Prefere a imagem renderizada do outfit salvo (maior) a do perfil.
+        existing.image_urls = [...new Set([...def.image_urls, ...existing.image_urls])];
         continue;
       }
       bySignature.set(signature, { ...def, signature });

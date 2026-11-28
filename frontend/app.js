@@ -1966,7 +1966,7 @@
 
     const img = document.createElement("img");
     img.alt = alt || "Avatar";
-    img.loading = "lazy";
+    img.loading = "eager";
     img.referrerPolicy = "no-referrer";
     let index = 0;
     img.addEventListener("load", () => wrap.classList.add("has-image"));

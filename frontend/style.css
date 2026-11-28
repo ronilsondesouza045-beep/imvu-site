@@ -3382,6 +3382,14 @@ kbd {
   padding-right: 34px;
 }
 
+.look-modal .look-avatar-wrap {
+  min-height: 220px;
+}
+
+.look-modal .look-avatar-wrap img {
+  max-height: 260px;
+}
+
 /* ============================================================
    RESPONSIVO — celulares e tablets (até 768px)
    Esta seção fica por último para vencer as regras antigas.
@@ -3939,6 +3947,14 @@ kbd {
 
   .look-modal .look-summary {
     padding-right: 40px;
+  }
+
+  .look-modal .look-avatar-wrap {
+    min-height: 190px;
+  }
+
+  .look-modal .look-avatar-wrap img {
+    max-height: 230px;
   }
 }
 
