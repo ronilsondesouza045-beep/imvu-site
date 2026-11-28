@@ -136,6 +136,20 @@
     profileWebLink: $("#profileWebLink"),
     profileAppLink: $("#profileAppLink"),
     profileCopyBtn: $("#profileCopyBtn"),
+    lookForm: $("#lookForm"),
+    lookInput: $("#lookInput"),
+    lookBtn: $("#lookBtn"),
+    lookStatus: $("#lookStatus"),
+    lookError: $("#lookError"),
+    lookResult: $("#lookResult"),
+    lookAvatar: $("#lookAvatar"),
+    lookAvatarFallback: $("#lookAvatarFallback"),
+    lookName: $("#lookName"),
+    lookCid: $("#lookCid"),
+    lookTotal: $("#lookTotal"),
+    lookCount: $("#lookCount"),
+    lookItemsCount: $("#lookItemsCount"),
+    lookItems: $("#lookItems"),
   };
 
   // ---------------- utilidades ----------------
@@ -1902,6 +1916,189 @@
       sendAlertStart(state.currentNick).catch(() => {});
     }
   });
+
+  // ---------------- extrator de look ----------------
+
+  const lookState = { busy: false, avatarTry: 0, avatarSources: [] };
+
+  function setLookError(message) {
+    if (!els.lookError) return;
+    if (!message) {
+      els.lookError.textContent = "";
+      els.lookError.classList.add("hidden");
+      return;
+    }
+    els.lookError.textContent = message;
+    els.lookError.classList.remove("hidden");
+  }
+
+  function setLookBusy(busy) {
+    lookState.busy = busy;
+    if (els.lookBtn) {
+      els.lookBtn.disabled = busy;
+      els.lookBtn.textContent = busy ? "Extraindo..." : "Extrair Look";
+    }
+    els.lookStatus?.classList.toggle("hidden", !busy);
+    if (busy) {
+      setLookError("");
+      els.lookResult?.classList.add("hidden");
+    }
+  }
+
+  function setLookAvatar(sources, nick) {
+    if (!els.lookAvatar) return;
+    const wrap = els.lookAvatar.closest(".look-avatar-wrap");
+    wrap?.classList.remove("has-image");
+    if (els.lookAvatarFallback) {
+      els.lookAvatarFallback.textContent = initialsOf({ username: nick || "?" });
+    }
+    lookState.avatarSources = [
+      ...new Set((sources || []).map((src) => proxiedImage(src)).filter(Boolean)),
+    ];
+    lookState.avatarTry = 0;
+    els.lookAvatar.onload = () => wrap?.classList.add("has-image");
+    els.lookAvatar.onerror = () => {
+      lookState.avatarTry += 1;
+      const next = lookState.avatarSources[lookState.avatarTry];
+      if (next) {
+        els.lookAvatar.src = next;
+      } else {
+        els.lookAvatar.removeAttribute("src");
+        wrap?.classList.remove("has-image");
+      }
+    };
+    els.lookAvatar.removeAttribute("src");
+    if (lookState.avatarSources.length) {
+      els.lookAvatar.src = lookState.avatarSources[0];
+    }
+  }
+
+  function renderLookItems(items) {
+    if (!els.lookItems) return;
+    els.lookItems.replaceChildren();
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      const empty = document.createElement("div");
+      empty.className = "look-grid-empty";
+      empty.textContent = "Nenhuma peça encontrada para este look.";
+      els.lookItems.appendChild(empty);
+      return;
+    }
+
+    for (const item of list) {
+      const card = document.createElement("article");
+      card.className = "look-item";
+
+      const media = document.createElement("div");
+      media.className = "look-item-media";
+      if (item.image) {
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.referrerPolicy = "no-referrer";
+        img.alt = item.name || "Produto";
+        img.src = proxiedImage(item.image);
+        img.addEventListener(
+          "error",
+          () => {
+            img.remove();
+            const placeholder = document.createElement("span");
+            placeholder.textContent = "?";
+            media.appendChild(placeholder);
+          },
+          { once: true }
+        );
+        media.appendChild(img);
+      } else {
+        const placeholder = document.createElement("span");
+        placeholder.textContent = "?";
+        media.appendChild(placeholder);
+      }
+
+      const name = document.createElement("h3");
+      name.className = "look-item-name";
+      name.textContent = item.name || "Produto";
+      name.title = item.name || "";
+
+      const price = document.createElement("div");
+      price.className = "look-item-price";
+      const value = Number(item.price) || 0;
+      price.textContent = value > 0 ? `💰 ${value.toLocaleString("pt-BR")} créditos` : "Grátis";
+
+      const link = document.createElement("a");
+      link.className = "btn-ghost look-item-link";
+      const shopUrl = String(item.shop_url || "");
+      link.href = /^https?:\/\//i.test(shopUrl)
+        ? shopUrl
+        : `https://www.imvu.com/shop/product.php?products_id=${encodeURIComponent(item.id || "")}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "🛒 Ver na Loja";
+
+      card.append(media, name, price, link);
+      els.lookItems.appendChild(card);
+    }
+  }
+
+  function renderLook(data) {
+    const items = Array.isArray(data.items) ? data.items : [];
+    const total = Number(data.total_credits) || 0;
+    if (els.lookName) els.lookName.textContent = data.display_name || data.nick || "—";
+    if (els.lookCid) els.lookCid.textContent = `cid ${data.cid || "—"}`;
+    if (els.lookTotal) {
+      els.lookTotal.textContent = `💰 Valor Total: ${total.toLocaleString("pt-BR")} créditos`;
+    }
+    if (els.lookCount) {
+      els.lookCount.textContent = `${items.length === 1 ? "1 item" : `${items.length} itens`} · avatar completo`;
+    }
+    if (els.lookItemsCount) els.lookItemsCount.textContent = String(items.length);
+    setLookAvatar([data.avatar_image, data.avatar_thumbnail], data.nick);
+    renderLookItems(items);
+    els.lookResult?.classList.remove("hidden");
+  }
+
+  async function extractLook(event) {
+    event?.preventDefault?.();
+    if (lookState.busy) return;
+    const nick = String(els.lookInput?.value || "")
+      .replace(/^@+/, "")
+      .trim()
+      .slice(0, 64);
+    if (!nick) {
+      setLookError("Digite um nick para extrair o look.");
+      els.lookInput?.focus();
+      return;
+    }
+
+    safeStorage.set("look:nick", nick);
+    setLookBusy(true);
+    try {
+      const response = await fetch(`${HTTP_BASE}/api/look/${encodeURIComponent(nick)}`, {
+        cache: "no-store",
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          json?.error ||
+            (response.status === 404
+              ? "Nick não encontrado."
+              : "Não foi possível extrair o look agora.")
+        );
+      }
+      renderLook(json);
+      document.title = `Look de ${json.display_name || json.nick || nick} — IMVU Radar`;
+      els.lookResult?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      setLookError(error?.message || "Falha ao extrair o look. Tente novamente.");
+    } finally {
+      setLookBusy(false);
+    }
+  }
+
+  els.lookForm?.addEventListener("submit", extractLook);
+  const savedLookNick = safeStorage.get("look:nick");
+  if (savedLookNick && els.lookInput && !els.lookInput.value) {
+    els.lookInput.value = savedLookNick;
+  }
 
   // Enter no input já usa o form. Botão "Parar" fica oculto até vigiar.
 

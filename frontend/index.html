@@ -79,6 +79,9 @@
       <nav class="view-tabs" aria-label="Seções do site">
         <button id="tabRadar" class="view-tab is-active" type="button" data-view="radar">📡 Radar</button>
         <button id="tabRadio" class="view-tab" type="button" data-view="radio">🎧 Rádio para Sala</button>
+        <button id="tabLook" class="view-tab" type="button" data-view="look">
+          🕵️ <span class="tab-label-full">Extrator de Look</span><span class="tab-label-short">Look</span>
+        </button>
       </nav>
 
       <div id="radarView">
@@ -382,6 +385,65 @@
               <span class="mono">!play nome-da-musica · !skip · !stop</span>
             </div>
           </article>
+        </section>
+      </div>
+
+      <div id="lookView" class="hidden">
+        <section class="look-hero">
+          <span class="eyebrow">Extrator de Look · IMVU</span>
+          <h1 class="font-display">Copie qualquer Look</h1>
+          <p>Digite o nick, veja o avatar 2D, todas as peças e o valor total em créditos.</p>
+        </section>
+
+        <section class="card look-panel">
+          <form id="lookForm" class="look-form" novalidate>
+            <div class="look-input-row">
+              <input
+                id="lookInput"
+                class="look-input"
+                type="text"
+                placeholder="Digite o nick do IMVU (ex: ir0ni)"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                maxlength="64"
+                aria-label="Nick do IMVU para extrair o look"
+              />
+              <button id="lookBtn" class="btn-primary look-btn" type="submit">Extrair Look</button>
+            </div>
+          </form>
+
+          <div id="lookStatus" class="look-status hidden" role="status" aria-live="polite">
+            <span class="look-spinner" aria-hidden="true"></span>
+            <span>Extraindo look... isso pode levar alguns segundos.</span>
+          </div>
+
+          <div id="lookError" class="look-error hidden" role="alert"></div>
+
+          <div id="lookResult" class="hidden">
+            <div class="look-summary">
+              <div class="look-avatar-wrap">
+                <span id="lookAvatarFallback" class="look-avatar-fallback" aria-hidden="true">?</span>
+                <img id="lookAvatar" alt="Avatar do look" loading="lazy" referrerpolicy="no-referrer" />
+              </div>
+              <div class="look-summary-info">
+                <div class="eyebrow-sm">Look de</div>
+                <h2 id="lookName" class="font-display">—</h2>
+                <p id="lookCid" class="mono">cid —</p>
+                <div id="lookTotal" class="look-total">💰 Valor Total: 0 créditos</div>
+                <div id="lookCount" class="look-count">0 itens</div>
+                <p class="look-warning">
+                  ⚠️ O valor pode variar se o item estiver em promoção ou se a conta for VIP (que tem desconto).
+                </p>
+              </div>
+            </div>
+
+            <div class="look-items-head">
+              <div class="eyebrow-sm">Peças do look</div>
+              <span id="lookItemsCount" class="count-pill">0</span>
+            </div>
+            <div id="lookItems" class="look-grid" aria-live="polite"></div>
+          </div>
         </section>
       </div>
 

@@ -139,6 +139,30 @@ app.get("/api/perfil/:nick", async (req, res) => {
   }
 });
 
+app.get("/api/look/:nick", async (req, res) => {
+  const raw = String(req.params.nick || "").trim();
+  if (!raw) {
+    res.status(400).json({ error: "nick obrigatorio" });
+    return;
+  }
+  const logged = await tracker.ensureLogin();
+  if (!logged) {
+    res.status(503).json({ error: tracker.api.lastError || "login falhou" });
+    return;
+  }
+  try {
+    const look = await tracker.api.extractLook(raw);
+    if (!look) {
+      res.status(404).json({ error: "nick nao encontrado" });
+      return;
+    }
+    res.setHeader("Cache-Control", "public, max-age=120");
+    res.json({ ok: true, ...look });
+  } catch (error) {
+    res.status(500).json({ error: error?.message || String(error) });
+  }
+});
+
 app.get("/api/push/key", (_req, res) => {
   res.json({ enabled: pushAvailable(), key: pushPublicKey() });
 });

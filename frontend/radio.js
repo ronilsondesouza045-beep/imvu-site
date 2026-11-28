@@ -12,8 +12,10 @@
   const els = {
     radarView: $("#radarView"),
     radioView: $("#radioView"),
+    lookView: $("#lookView"),
     tabRadar: $("#tabRadar"),
     tabRadio: $("#tabRadio"),
+    tabLook: $("#tabLook"),
     streamInput: $("#radioStreamInput"),
     copyStreamBtn: $("#radioCopyStreamBtn"),
     adminWarning: $("#radioAdminWarning"),
@@ -363,11 +365,15 @@
 
   function setView(view) {
     const isRadio = view === "radio";
-    els.radarView?.classList.toggle("hidden", isRadio);
+    const isLook = view === "look";
+    const isRadar = view === "radar";
+    els.radarView?.classList.toggle("hidden", !isRadar);
     els.radioView?.classList.toggle("hidden", !isRadio);
-    els.tabRadar?.classList.toggle("is-active", !isRadio);
+    els.lookView?.classList.toggle("hidden", !isLook);
+    els.tabRadar?.classList.toggle("is-active", isRadar);
     els.tabRadio?.classList.toggle("is-active", isRadio);
-    document.body.dataset.view = isRadio ? "radio" : "radar";
+    els.tabLook?.classList.toggle("is-active", isLook);
+    document.body.dataset.view = view;
     // Links antigos de ajuda caem no radar.
     if (window.location.hash === "#ajuda") {
       history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -375,6 +381,8 @@
     if (isRadio) {
       document.title = "DJ para Sala — IMVU Radar";
       fetchStatus({ silent: true });
+    } else if (isLook) {
+      document.title = "Extrator de Look — IMVU Radar";
     } else {
       document.title = "IMVU Radar — presença em tempo real";
     }
@@ -382,6 +390,7 @@
 
   els.tabRadar?.addEventListener("click", () => setView("radar"));
   els.tabRadio?.addEventListener("click", () => setView("radio"));
+  els.tabLook?.addEventListener("click", () => setView("look"));
   els.form?.addEventListener("submit", joinBot);
   els.songForm?.addEventListener("submit", requestSong);
   els.disconnectBtn?.addEventListener("click", leaveBot);
@@ -405,6 +414,8 @@
   const initialView = String(params.get("view") || "").toLowerCase();
   if (initialView === "radio") {
     setView("radio");
+  } else if (initialView === "look") {
+    setView("look");
   } else {
     setView("radar");
   }

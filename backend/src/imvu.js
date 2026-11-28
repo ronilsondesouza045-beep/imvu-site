@@ -17,6 +17,11 @@ const CHAT_DIRECTORY_TTL = 120_000;
 const USER_TTL = 10 * 60_000;
 const IMAGE_TTL = 10 * 60_000;
 const IMAGE_CACHE_MAX = 250;
+// Extrator de look: cache do resultado e dos detalhes de produto.
+const LOOK_TTL = 5 * 60_000;
+const PRODUCT_TTL = 10 * 60_000;
+const LOOK_MAX_PRODUCTS = 150;
+const LOOK_CONCURRENCY = 10;
 // Pagina publica da sala (og:title/og:image): fallback quando o room node 403.
 const ROOM_WEB_META_TTL = 10 * 60_000;
 const ROOM_WEB_META_EMPTY_TTL = 2 * 60_000;
@@ -282,6 +287,8 @@ export class ImvuApi {
     this.chatDirectoryPromise = null;
     this.imageCache = new Map();
     this.catvuCache = new Map();
+    this.lookCache = new Map();
+    this.productDetailCache = new Map();
   }
 
   cookieHeader() {
@@ -597,6 +604,115 @@ export class ImvuApi {
       if (oldest) this.profileCache.delete(oldest);
     }
     return profile;
+  }
+
+  /** Detalhe de um produto do look (cache 10 min). */
+  async productDetail(id) {
+    const key = String(id || "");
+    if (!/^\d+$/.test(key)) return null;
+    const cached = this.productDetailCache.get(key);
+    if (cached && now() - cached.at < PRODUCT_TTL) return cached.item;
+
+    const env = await this.getJson(`/product/product-${key}`).catch(() => null);
+    const data =
+      this.firstNode(env, (nodeKey) => nodeKey.includes(`/product/product-${key}`))?.node?.data ||
+      this.firstNode(env)?.node?.data ||
+      null;
+    if (!data) return null;
+
+    const name = String(data.product_name || "").trim();
+    if (!name) return null;
+
+    const regular = Number(data.product_price);
+    const sale = Number(data.discount_price);
+    const price = Number.isFinite(regular) ? regular : Number.isFinite(sale) ? sale : 0;
+    const item = {
+      id: key,
+      name,
+      price,
+      sale_price: Number.isFinite(sale) ? sale : 0,
+      image: normalizeUrl(data.product_image || data.preview_image || ""),
+      shop_url: String(
+        data.product_page || `https://www.imvu.com/shop/product.php?products_id=${key}`
+      ),
+      category: Array.isArray(data.categories) ? data.categories.join(" / ") : "",
+      creator: String(data.creator_name || ""),
+      visible: data.is_visible !== false,
+      purchasable: data.is_purchasable !== false,
+    };
+    this.productDetailCache.set(key, { at: now(), item });
+    if (this.productDetailCache.size > 500) {
+      const oldest = this.productDetailCache.keys().next().value;
+      if (oldest) this.productDetailCache.delete(oldest);
+    }
+    return item;
+  }
+
+  /**
+   * Extrai o look completo de um nick:
+   * avatar 2D + todas as pecas (profile_outfit) + preco total em creditos.
+   */
+  async extractLook(nick) {
+    const clean = safeNick(nick);
+    if (!clean) return null;
+    const cacheKey = clean.toLowerCase();
+    const cached = this.lookCache.get(cacheKey);
+    if (cached && now() - cached.at < LOOK_TTL) return cached.result;
+
+    const person = await this.resolve(clean);
+    if (!person?.cid) return null;
+    const cid = String(person.cid);
+    if (!/^\d+$/.test(cid)) return null;
+
+    const [userNode, outfitEnv] = await Promise.all([
+      this.userNode(cid, 0).catch(() => null),
+      this.getJson(`/profile_outfit/profile_outfit-${cid}`).catch(() => null),
+    ]);
+
+    const outfit =
+      this.firstNode(outfitEnv, (key) => key.includes("/profile_outfit/"))?.node?.data ||
+      this.firstNode(outfitEnv)?.node?.data ||
+      {};
+    const rawProducts = Array.isArray(outfit.products) ? outfit.products : [];
+    const ids = [
+      ...new Set(
+        rawProducts
+          .map((item) => {
+            const direct = String(item?.product_id || "");
+            if (/^\d+$/.test(direct)) return direct;
+            const fromUrl = String(item?.id || "").match(/product-(\d+)/);
+            return fromUrl ? fromUrl[1] : "";
+          })
+          .filter(Boolean)
+      ),
+    ].slice(0, LOOK_MAX_PRODUCTS);
+
+    const items = [];
+    for (let i = 0; i < ids.length; i += LOOK_CONCURRENCY) {
+      const chunk = ids.slice(i, i + LOOK_CONCURRENCY);
+      const details = await Promise.all(chunk.map((id) => this.productDetail(id)));
+      for (const item of details) if (item) items.push(item);
+    }
+
+    const total = items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+    const userData = userNode?.data || {};
+    const result = {
+      nick: person.username || clean,
+      display_name: person.displayName || person.username || clean,
+      cid,
+      avatar_image: normalizeUrl(userData.avatar_image || person.render || ""),
+      avatar_thumbnail: normalizeUrl(userData.thumbnail_url || person.avatar || ""),
+      total_credits: total,
+      item_count: items.length,
+      items,
+    };
+    this.lookCache.set(cacheKey, { at: now(), result });
+    this.lookCache.set(cid, { at: now(), result });
+    if (this.lookCache.size > 200) {
+      const oldest = this.lookCache.keys().next().value;
+      if (oldest) this.lookCache.delete(oldest);
+    }
+    return result;
   }
 
   /** Extrai a câmera real do shell a partir do skeleton JSON do IMVU. */
@@ -1518,12 +1634,27 @@ export class ImvuApi {
       Referer: "https://www.imvu.com/",
     };
     if (this.cookies.size) headers.Cookie = this.cookieHeader();
+    if (this.sauce) {
+      headers["x-imvu-sauce"] = this.sauce;
+      headers["x-imvu-application"] = "next_desktop/1";
+    }
     try {
-      const response = await fetch(key, {
+      let response = await fetch(key, {
         headers,
         redirect: "follow",
         signal: AbortSignal.timeout(20_000),
       });
+      // CDNs publicos as vezes rejeitam cookies/Origin; tenta limpo.
+      if (!response.ok && [401, 403, 502].includes(response.status)) {
+        response = await fetch(key, {
+          headers: {
+            "User-Agent": this.ua,
+            Accept: "image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout(20_000),
+        });
+      }
       if (!response.ok) return { error: `upstream ${response.status}`, status: 502 };
       const length = intOr(response.headers.get("content-length"), 0);
       if (length > IMAGE_MAX_BYTES) return { error: "imagem grande demais", status: 502 };
