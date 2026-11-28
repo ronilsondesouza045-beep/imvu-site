@@ -485,6 +485,23 @@
 
     <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 
+    <div
+      id="pwaInstallHelp"
+      class="pwa-help hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pwaHelpTitle"
+      aria-hidden="true"
+    >
+      <div class="pwa-help-card">
+        <button id="pwaHelpClose" class="pwa-help-close" type="button" aria-label="Fechar">×</button>
+        <div class="eyebrow-sm">Instalar aplicativo</div>
+        <h2 id="pwaHelpTitle" class="font-display">Adicionar à tela inicial</h2>
+        <p id="pwaHelpText"></p>
+        <button id="pwaHelpOk" class="btn-primary w-full" type="button">Entendi</button>
+      </div>
+    </div>
+
     <script src="config.js"></script>
     <script src="app.js"></script>
     <script src="radio.js"></script>
@@ -499,6 +516,8 @@
 
       (() => {
         const installBtn = document.getElementById('btn-instalar-pwa');
+        const help = document.getElementById('pwaInstallHelp');
+        const helpText = document.getElementById('pwaHelpText');
         if (!installBtn) return;
 
         let deferredPrompt = null;
@@ -514,24 +533,71 @@
           installBtn.style.display = 'none';
         };
 
+        const isIOS = () =>
+          /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+        const isInApp = () =>
+          /FBAN|FBAV|Instagram|Line\/|MicroMessenger|Snapchat|TikTok|musical_ly|WhatsApp|Telegram|WebView|wv\)/i.test(
+            navigator.userAgent
+          );
+
+        const helpMessage = () => {
+          if (isIOS()) {
+            return 'No iPhone/iPad: toque no botão Compartilhar (quadrado com seta) e escolha "Adicionar à Tela de Início".';
+          }
+          if (isInApp()) {
+            return 'Você está no navegador interno de um app. Abra o menu (⋯) e escolha "Abrir no navegador" ou "Abrir no Chrome". Depois toque em "Instalar aplicativo".';
+          }
+          return 'Abra o menu do navegador (⋮) e toque em "Instalar aplicativo" ou "Adicionar à tela inicial". No Chrome, o ícone de instalação também aparece na barra de endereço.';
+        };
+
+        const openHelp = () => {
+          if (!help) return;
+          if (helpText) helpText.textContent = helpMessage();
+          help.classList.remove('hidden');
+          help.setAttribute('aria-hidden', 'false');
+        };
+        const closeHelp = () => {
+          if (!help) return;
+          help.classList.add('hidden');
+          help.setAttribute('aria-hidden', 'true');
+        };
+
+        if (isStandalone()) {
+          hideInstall();
+          return;
+        }
+        showInstall();
+
         window.addEventListener('beforeinstallprompt', (event) => {
           event.preventDefault();
           deferredPrompt = event;
-          if (!isStandalone()) showInstall();
+          showInstall();
         });
 
         installBtn.addEventListener('click', async () => {
-          if (!deferredPrompt) return;
+          if (!deferredPrompt) {
+            openHelp();
+            return;
+          }
           deferredPrompt.prompt();
           const { outcome } = await deferredPrompt.userChoice;
           console.log(outcome === 'accepted' ? 'PWA instalado!' : 'Instalação recusada.');
           deferredPrompt = null;
-          hideInstall();
+          if (outcome === 'accepted') hideInstall();
         });
 
         window.addEventListener('appinstalled', () => {
           deferredPrompt = null;
           hideInstall();
+          closeHelp();
+        });
+
+        document.getElementById('pwaHelpClose')?.addEventListener('click', closeHelp);
+        document.getElementById('pwaHelpOk')?.addEventListener('click', closeHelp);
+        help?.addEventListener('click', (event) => {
+          if (event.target === help) closeHelp();
         });
       })();
     </script>

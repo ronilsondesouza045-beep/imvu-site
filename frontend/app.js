@@ -161,11 +161,40 @@
     return (clean.slice(0, 2) || "?").toUpperCase();
   };
 
+  const isImvuApiImage = (url) => {
+    try {
+      const host = new URL(url, window.location.href).hostname.toLowerCase();
+      return host === "api.imvu.com" || host.endsWith(".api.imvu.com");
+    } catch {
+      return false;
+    }
+  };
+
   const proxiedImage = (raw) => {
     const url = String(raw || "").trim();
     if (!url) return "";
     if (url.startsWith("/") || url.startsWith("data:") || url.startsWith("blob:")) return url;
+    if (!isImvuApiImage(url)) return url;
     return `${HTTP_BASE}/api/avatar?u=${encodeURIComponent(url)}`;
+  };
+
+  const avatarSources = (person) => {
+    const raw = [
+      person?.thumbnail,
+      person?.avatarImage,
+      person?.avatar,
+      person?.lookThumbnail,
+      person?.portrait,
+      person?.avatarPortrait,
+      person?.render,
+      person?.lookImage,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const unique = [...new Set(raw)];
+    const direct = unique.filter((url) => !isImvuApiImage(url));
+    const viaProxy = unique.filter((url) => isImvuApiImage(url));
+    return [...new Set([...direct, ...viaProxy])].map(proxiedImage).filter(Boolean);
   };
 
   const setClass = (element, className) => {
@@ -366,17 +395,17 @@
       let text = "Alertas desativados";
       if (alerts.busy) {
         kind = "is-warn";
-        text = "Ativando alertas... aguarde atÃ© 30s";
+        text = "Ativando alertas... aguarde até 30s";
       } else if (alerts.permission === "denied") {
         kind = "is-error";
-        text = "PermissÃ£o de notificaÃ§Ã£o negada";
+        text = "Permissão de notificação negada";
       } else if (typeof Notification === "undefined") {
         kind = "is-warn";
-        text = "Navegador sem suporte a notificaÃ§Ãµes";
+        text = "Navegador sem suporte a notificações";
       } else if (alerts.enabled) {
         kind = "is-active";
-        const expiry = alerts.expiresAt ? ` atÃ© ${timeOf(alerts.expiresAt)}` : "";
-        text = `Alertas ativos${expiry} Â· ${alerts.mode === "push" ? "push" : "aba aberta"}`;
+        const expiry = alerts.expiresAt ? ` até ${timeOf(alerts.expiresAt)}` : "";
+        text = `Alertas ativos${expiry} · ${alerts.mode === "push" ? "push" : "aba aberta"}`;
       }
       if (kind) els.alertsStatus.classList.add(kind);
       if (els.alertsStatusText) els.alertsStatusText.textContent = text;
@@ -392,7 +421,7 @@
     if (els.alertsInfo) {
       let info = "";
       if (alerts.busy) {
-        info = "Preparando a assinatura push. Pode levar atÃ© 30s...";
+        info = "Preparando a assinatura push. Pode levar até 30s...";
       } else if (alerts.enabled) {
         const monitored = alerts.nick || state.currentNick || "nick";
         info =
@@ -404,7 +433,7 @@
       } else if (alerts.pushEnabled) {
         info = `Pronto para ativar alertas para @${state.currentNick}.`;
       } else {
-        info = "Push indisponÃ­vel neste navegador; os alertas funcionam com a aba aberta.";
+        info = "Push indisponível neste navegador; os alertas funcionam com a aba aberta.";
       }
       els.alertsInfo.textContent = info;
     }
@@ -572,7 +601,7 @@
       if (alerts.boundToBackend) return;
       alerts.busy = false;
       alertsRender();
-      toast("O servidor nÃ£o confirmou os alertas", {
+      toast("O servidor não confirmou os alertas", {
         kind: "warn",
         detail: "Tente ativar novamente.",
       });
@@ -595,7 +624,7 @@
       return;
     }
     if (typeof Notification === "undefined" || typeof Notification.requestPermission !== "function") {
-      toast("Este navegador nÃ£o suporta notificaÃ§Ãµes", { kind: "danger" });
+      toast("Este navegador não suporta notificações", { kind: "danger" });
       return;
     }
 
@@ -605,15 +634,15 @@
       const permission = await Notification.requestPermission();
       alerts.permission = permission;
       if (permission !== "granted") {
-        toast("PermissÃ£o de notificaÃ§Ã£o negada", {
+        toast("Permissão de notificação negada", {
           kind: "warn",
-          detail: "Libere as notificaÃ§Ãµes nas configuraÃ§Ãµes do navegador.",
+          detail: "Libere as notificações nas configurações do navegador.",
         });
         return;
       }
 
       const registration = await registerServiceWorker();
-      if (!registration) throw new Error("service worker indisponÃ­vel");
+      if (!registration) throw new Error("service worker indisponível");
 
       const pushReady = await fetchPushConfig();
       let subscription = null;
@@ -641,10 +670,10 @@
         alerts.boundToBackend = false;
         alertsSaveSettings();
         const sent = await sendAlertStart(state.currentNick);
-        if (!sent) throw new Error("sem conexÃ£o com o servidor");
+        if (!sent) throw new Error("sem conexão com o servidor");
         await showLocalNotification(
           "Ativando alertas",
-          `Avisos de ${state.currentNick} serÃ£o enviados pelo navegador.`
+          `Avisos de ${state.currentNick} serão enviados pelo navegador.`
         );
         alertLogAdd(`Ativando alertas para @${state.currentNick}`);
       } else {
@@ -662,7 +691,7 @@
         toast("Alertas locais ativados", {
           kind: "success",
           detail: pushError
-            ? "Push indisponÃ­vel agora; mantenha a aba aberta."
+            ? "Push indisponível agora; mantenha a aba aberta."
             : "Mantenha a aba aberta (pode minimizar).",
         });
       }
@@ -719,27 +748,27 @@
   async function testAlerts() {
     if (alerts.busy) return;
     if (typeof Notification === "undefined") {
-      toast("Este navegador nÃ£o suporta notificaÃ§Ãµes", { kind: "danger" });
+      toast("Este navegador não suporta notificações", { kind: "danger" });
       return;
     }
     let permission = Notification.permission;
     if (permission !== "granted") permission = await Notification.requestPermission();
     alerts.permission = permission;
     if (permission !== "granted") {
-      toast("PermissÃ£o de notificaÃ§Ã£o negada", { kind: "warn" });
+      toast("Permissão de notificação negada", { kind: "warn" });
       alertsRender();
       return;
     }
     const registration = await registerServiceWorker();
     if (!registration) {
-      toast("Service worker indisponÃ­vel", { kind: "danger" });
+      toast("Service worker indisponível", { kind: "danger" });
       return;
     }
-    await showLocalNotification("Teste de alerta", "Se vocÃª estÃ¡ vendo isso, as notificaÃ§Ãµes estÃ£o funcionando.");
+    await showLocalNotification("Teste de alerta", "Se você está vendo isso, as notificações estão funcionando.");
     if (alerts.enabled && alerts.mode === "push" && alerts.subscription?.endpoint) {
       wsSend({ type: "alert_test", endpoint: alerts.subscription.endpoint });
     }
-    toast("Teste enviado", { kind: "success", detail: "Veja a notificaÃ§Ã£o do navegador." });
+    toast("Teste enviado", { kind: "success", detail: "Veja a notificação do navegador." });
   }
 
   async function initAlerts() {
@@ -799,14 +828,14 @@
 
   const formatProfileNumber = (value) => {
     const number = Number(value);
-    if (!Number.isFinite(number) || number < 0) return "â€”";
+    if (!Number.isFinite(number) || number < 0) return "—";
     return number.toLocaleString("pt-BR");
   };
 
   const formatProfileDate = (value) => {
-    if (!value) return "â€”";
+    if (!value) return "—";
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "â€”";
+    if (Number.isNaN(date.getTime())) return "—";
     return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
   };
 
@@ -828,8 +857,9 @@
     const person = {
       displayName: data?.displayName || data?.username || "",
       username: data?.username || "",
+      thumbnail: data?.thumbnail || "",
       avatar: data?.avatar || "",
-      avatarPortrait: data?.avatar || data?.portrait || "",
+      avatarPortrait: data?.avatarPortrait || data?.portrait || "",
       portrait: data?.portrait || "",
     };
     const avatar = createAvatar(person, "profile-avatar");
@@ -842,15 +872,15 @@
     els.profileError?.classList.add("hidden");
 
     if (els.profileModalName) els.profileModalName.textContent = profile.displayName || profile.username || profile.cid;
-    if (els.profileUsername) els.profileUsername.textContent = `@${profile.username || profile.cid || "â€”"}`;
-    if (els.profileCid) els.profileCid.textContent = `cid ${profile.cid || "â€”"}`;
+    if (els.profileUsername) els.profileUsername.textContent = `@${profile.username || profile.cid || "—"}`;
+    if (els.profileCid) els.profileCid.textContent = `cid ${profile.cid || "—"}`;
     renderProfileBadges(profile);
     renderProfileAvatar(profile);
 
     if (els.profileFollowers) els.profileFollowers.textContent = formatProfileNumber(profile.followers);
     if (els.profileFollowing) els.profileFollowing.textContent = formatProfileNumber(profile.following);
     if (els.profileJoined) els.profileJoined.textContent = formatProfileDate(profile.joinedAt);
-    if (els.profileAge) els.profileAge.textContent = profile.age ? `${profile.age} anos` : "â€”";
+    if (els.profileAge) els.profileAge.textContent = profile.age ? `${profile.age} anos` : "—";
 
     if (els.profileStatusBox && els.profileStatus) {
       const status = String(profile.status || "").trim();
@@ -921,10 +951,10 @@
     renderProfileBadges(person);
     renderProfileAvatar(person);
 
-    if (els.profileFollowers) els.profileFollowers.textContent = "â€”";
-    if (els.profileFollowing) els.profileFollowing.textContent = "â€”";
-    if (els.profileJoined) els.profileJoined.textContent = "â€”";
-    if (els.profileAge) els.profileAge.textContent = "â€”";
+    if (els.profileFollowers) els.profileFollowers.textContent = "—";
+    if (els.profileFollowing) els.profileFollowing.textContent = "—";
+    if (els.profileJoined) els.profileJoined.textContent = "—";
+    if (els.profileAge) els.profileAge.textContent = "—";
     els.profileInfo?.classList.add("hidden");
     els.profileError?.classList.add("hidden");
     if (els.profileError) els.profileError.textContent = "";
@@ -957,7 +987,7 @@
       .then(async (response) => {
         const json = await response.json().catch(() => ({}));
         if (!response.ok || !json?.ok || !json.profile) {
-          throw new Error(json?.error || "Perfil indisponÃ­vel no momento.");
+          throw new Error(json?.error || "Perfil indisponível no momento.");
         }
         profileModal.cache.set(cid, { at: Date.now(), profile: json.profile });
         renderProfile(json.profile, requestId);
@@ -969,7 +999,7 @@
           els.profileError.textContent =
             error?.name === "AbortError"
               ? "O IMVU demorou para responder. Tente novamente."
-              : error?.message || "NÃ£o foi possÃ­vel carregar o perfil.";
+              : error?.message || "Não foi possível carregar o perfil.";
           els.profileError.classList.remove("hidden");
         }
       })
@@ -1053,7 +1083,7 @@
           alertLogAdd(`Sala: ${roomLabel}`);
           maybeLocalNotify(
             "IMVU Radar",
-            `${state.target?.displayName || state.target?.username || "Alvo"} â€¢ ${roomLabel}`
+            `${state.target?.displayName || state.target?.username || "Alvo"} • ${roomLabel}`
           );
         }
         break;
@@ -1061,7 +1091,7 @@
 
       case "location_hidden":
         state.locationHidden = true;
-        state.locationHiddenTitle = message.title || "LocalizaÃ§Ã£o IndisponÃ­vel";
+        state.locationHiddenTitle = message.title || "Localização Indisponível";
         state.locationHiddenText = message.message || "";
         state.room = null;
         state.rooms = [];
@@ -1070,7 +1100,7 @@
         renderTarget();
         renderRoom();
         renderOccupants();
-        setStatus("hidden", "IndisponÃ­vel");
+        setStatus("hidden", "Indisponível");
         break;
 
       case "offline":
@@ -1098,7 +1128,7 @@
         state.occupants = state.room?.occupants || [];
         renderRoom();
         renderOccupants();
-        if (!state.rooms.length) setStatus("offline", "Fora de sala â€” monitorando...");
+        if (!state.rooms.length) setStatus("offline", "Fora de sala — monitorando...");
         toast(`${message.nick || state.target?.username || "O alvo"} saiu da sala`, {
           kind: "warn",
           detail: roomName,
@@ -1127,10 +1157,10 @@
           renderRoom();
           renderOccupants();
         }
-        const name = person?.displayName || person?.username || message.nick || "AlguÃ©m";
+        const name = person?.displayName || person?.username || message.nick || "Alguém";
         toast(`${name} entrou na sala`, {
           kind: "success",
-          detail: person?.username ? `@${person.username} Â· ${timeOf(message.at)}` : timeOf(message.at),
+          detail: person?.username ? `@${person.username} · ${timeOf(message.at)}` : timeOf(message.at),
         });
         alertLogAdd(`${name} entrou na sala`);
         maybeLocalNotify("IMVU Radar", `${name} entrou na sala`);
@@ -1157,10 +1187,10 @@
           message.occupant?.username ||
           message.nickOut ||
           message.nick ||
-          "AlguÃ©m";
+          "Alguém";
         toast(`${name} saiu da sala`, {
           kind: "danger",
-          detail: message.occupant?.username ? `@${message.occupant.username} Â· ${timeOf(message.at)}` : timeOf(message.at),
+          detail: message.occupant?.username ? `@${message.occupant.username} · ${timeOf(message.at)}` : timeOf(message.at),
         });
         alertLogAdd(`${name} saiu da sala`);
         maybeLocalNotify("IMVU Radar", `${name} saiu da sala`);
@@ -1202,7 +1232,7 @@
         alertsRender();
         toast("Alertas ativados", {
           kind: "success",
-          detail: alerts.expiresAt ? `AtÃ© ${timeOf(alerts.expiresAt)}` : "",
+          detail: alerts.expiresAt ? `Até ${timeOf(alerts.expiresAt)}` : "",
         });
         alertLogAdd(`Alertas ativos para @${alerts.nick}`);
         break;
@@ -1264,27 +1294,27 @@
   function createAvatar(person, className) {
     const wrap = document.createElement("div");
     wrap.className = className;
-    const url = proxiedImage(
-      person?.avatarPortrait || person?.portrait || person?.avatar || person?.render
-    );
-    if (url) {
-      const img = document.createElement("img");
-      img.alt = person?.displayName || person?.username || "avatar";
-      img.loading = "lazy";
-      img.referrerPolicy = "no-referrer";
-      img.addEventListener(
-        "error",
-        () => {
-          img.remove();
-          appendInitials(wrap, person);
-        },
-        { once: true }
-      );
-      img.src = url;
-      wrap.appendChild(img);
-    } else {
+    const sources = avatarSources(person);
+    if (!sources.length) {
       appendInitials(wrap, person);
+      return wrap;
     }
+    const img = document.createElement("img");
+    img.alt = person?.displayName || person?.username || "avatar";
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    let index = 0;
+    img.addEventListener("error", () => {
+      index += 1;
+      if (index < sources.length) {
+        img.src = sources[index];
+        return;
+      }
+      img.remove();
+      appendInitials(wrap, person);
+    });
+    img.src = sources[0];
+    wrap.appendChild(img);
     return wrap;
   }
 
@@ -1314,9 +1344,9 @@
       while (avatar.firstChild) els.targetAvatar.appendChild(avatar.firstChild);
       els.targetAvatar.dataset.cid = String(target.cid || "");
     }
-    if (els.targetName) els.targetName.textContent = target.displayName || target.username || "â€”";
-    if (els.targetUser) els.targetUser.textContent = `@${target.username || "â€”"}`;
-    if (els.targetCid) els.targetCid.textContent = `cid ${target.cid || "â€”"}`;
+    if (els.targetName) els.targetName.textContent = target.displayName || target.username || "—";
+    if (els.targetUser) els.targetUser.textContent = `@${target.username || "—"}`;
+    if (els.targetCid) els.targetCid.textContent = `cid ${target.cid || "—"}`;
     if (els.targetOnline) els.targetOnline.textContent = target.online ? "online" : "offline";
     if (els.targetSince) els.targetSince.textContent = state.watchStartedAt ? `${timeOf(state.watchStartedAt)}` : "agora";
 
@@ -1327,7 +1357,7 @@
       if (target.isAp) els.targetBadges.appendChild(makeBadge("AP", "tag-ap"));
     }
 
-    document.title = `${target.displayName || target.username || "Nick"} â€” IMVU Radar`;
+    document.title = `${target.displayName || target.username || "Nick"} — IMVU Radar`;
   }
 
   // ---------------- render: sala ----------------
@@ -1353,10 +1383,10 @@
     } else if (state.status === "offline") {
       if (els.roomEmptyTitle) els.roomEmptyTitle.textContent = "Fora de sala";
       if (els.roomEmptyText) {
-        els.roomEmptyText.textContent = "O alvo nÃ£o estÃ¡ em nenhuma sala agora. O radar continua ligado e avisa quando mudar.";
+        els.roomEmptyText.textContent = "O alvo não está em nenhuma sala agora. O radar continua ligado e avisa quando mudar.";
       }
     } else if (state.status === "error") {
-      if (els.roomEmptyTitle) els.roomEmptyTitle.textContent = "NÃ£o foi possÃ­vel rastrear";
+      if (els.roomEmptyTitle) els.roomEmptyTitle.textContent = "Não foi possível rastrear";
       if (els.roomEmptyText) els.roomEmptyText.textContent = state.statusText || "Confira o nick e tente novamente.";
     } else {
       setRoomEmptyDefaults();
@@ -1367,7 +1397,7 @@
   }
 
   const ROOM_TYPE_META = {
-    PUBLIC: { label: "PÃºblica", className: "tag-public" },
+    PUBLIC: { label: "Pública", className: "tag-public" },
     PRIVATE: { label: "Privada", className: "tag-private" },
     MY_ROOM: { label: "My Room", className: "tag-myroom" },
     AP: { label: "AP", className: "tag-ap" },
@@ -1406,7 +1436,7 @@
   }
 
   function roomDisplayName(room) {
-    if (!room) return "â€”";
+    if (!room) return "—";
     const roomId = String(room.roomId || "").trim();
     const rawName = String(room.name || "").trim();
     const type = roomTypeOf(room);
@@ -1419,7 +1449,7 @@
     if (!genericName) return rawName;
     if (type === "MY_ROOM") return "My Room";
     if (isPrivate) return `Sala Privada (ID: ${roomId || "?"})`;
-    return roomId ? `Sala PÃºblica (ID: ${roomId})` : "â€”";
+    return roomId ? `Sala Pública (ID: ${roomId})` : "—";
   }
 
   function renderRoomsGrid() {
@@ -1459,7 +1489,7 @@
       const occupancy = Math.max(Number(room.occupancy) || 0, people.length);
       const capacity = Number(room.capacity) > 0 ? ` / cap. ${room.capacity}` : "";
       bits.push(`${occupancy}${capacity} na sala`);
-      info.textContent = bits.join(" Â· ");
+      info.textContent = bits.join(" · ");
 
       const actions = document.createElement("div");
       actions.className = "room-card-actions";
@@ -1490,7 +1520,7 @@
 
       const direct = document.createElement("div");
       direct.className = "room-card-link mono";
-      direct.textContent = link ? readableLink(link) : "â€”";
+      direct.textContent = link ? readableLink(link) : "—";
 
       const roster = document.createElement("div");
       roster.className = "room-roster";
@@ -1517,7 +1547,7 @@
       if (!sorted.length) {
         const empty = document.createElement("span");
         empty.className = "room-roster-empty";
-        empty.textContent = "ninguÃ©m visÃ­vel";
+        empty.textContent = "ninguém visível";
         roster.appendChild(empty);
       } else if (people.length > sorted.length) {
         const more = document.createElement("span");
@@ -1589,8 +1619,8 @@
       const targetName = state.target.displayName || state.target.username || "Nick";
       document.title =
         rooms.length > 1
-          ? `${targetName} em ${rooms.length} salas â€” IMVU Radar`
-          : `${targetName} em ${roomDisplayName(room)} â€” IMVU Radar`;
+          ? `${targetName} em ${rooms.length} salas — IMVU Radar`
+          : `${targetName} em ${roomDisplayName(room)} — IMVU Radar`;
     }
   }
 
@@ -1610,7 +1640,7 @@
       const empty = document.createElement("div");
       empty.className =
         "col-span-full rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-slate-500";
-      empty.textContent = state.room ? "NinguÃ©m visÃ­vel na sala." : "NinguÃ©m para mostrar ainda.";
+      empty.textContent = state.room ? "Ninguém visível na sala." : "Ninguém para mostrar ainda.";
       els.occupants.appendChild(empty);
       return;
     }
@@ -1635,10 +1665,10 @@
       body.className = "min-w-0 flex-1";
       const name = document.createElement("div");
       name.className = "occupant-name";
-      name.textContent = person.displayName || person.username || person.nick || "â€”";
+      name.textContent = person.displayName || person.username || person.nick || "—";
       const user = document.createElement("div");
       user.className = "occupant-user";
-      user.textContent = `@${person.username || person.nick || "â€”"}`;
+      user.textContent = `@${person.username || person.nick || "—"}`;
       body.append(name, user);
       card.appendChild(body);
 
@@ -1709,7 +1739,7 @@
     close.className = "toast-close";
     close.type = "button";
     close.setAttribute("aria-label", "Fechar");
-    close.textContent = "Ã—";
+    close.textContent = "×";
     close.addEventListener("click", () => dismissToast(element));
 
     element.append(icon, body, close);
@@ -1739,7 +1769,7 @@
       }
       toast(successMessage, { kind: "info", detail: text, timeout: 2500 });
     } catch {
-      toast("NÃ£o foi possÃ­vel copiar", { kind: "warn", detail: text, timeout: 3000 });
+      toast("Não foi possível copiar", { kind: "warn", detail: text, timeout: 3000 });
     }
   }
 
@@ -1762,13 +1792,13 @@
     els.targetContent?.classList.add("hidden");
     if (els.targetEmptyTitle) els.targetEmptyTitle.textContent = "Nenhum nick ainda";
     if (els.targetEmptyText) {
-      els.targetEmptyText.textContent = "Digite um nick acima e clique em Vigiar para comeÃ§ar a monitorar.";
+      els.targetEmptyText.textContent = "Digite um nick acima e clique em Vigiar para começar a monitorar.";
     }
     if (els.targetEmptyAvatar) els.targetEmptyAvatar.textContent = "?";
     renderRoom();
     renderOccupants();
     setStatus("idle", "Aguardando");
-    document.title = "IMVU Radar â€” presenÃ§a em tempo real";
+    document.title = "IMVU Radar — presença em tempo real";
     alertsRender();
   }
 
@@ -1811,7 +1841,7 @@
     if (!nick) {
       els.watchForm.querySelector(".search-box")?.classList.add("shake");
       setTimeout(() => document.querySelector(".search-box")?.classList.remove("shake"), 420);
-      toast("Digite um nick", { kind: "warn", detail: "O nick Ã© obrigatÃ³rio para iniciar o rastreio." });
+      toast("Digite um nick", { kind: "warn", detail: "O nick é obrigatório para iniciar o rastreio." });
       els.nickInput?.focus();
       return;
     }
@@ -1835,7 +1865,7 @@
       kind: "info",
       detail: alerts.enabled
         ? "Os alertas continuam ativos no painel."
-        : "O radar nÃ£o estÃ¡ mais vigiando esse nick.",
+        : "O radar não está mais vigiando esse nick.",
     });
   });
 
@@ -1873,7 +1903,7 @@
     }
   });
 
-  // Enter no input jÃ¡ usa o form. BotÃ£o "Parar" fica oculto atÃ© vigiar.
+  // Enter no input já usa o form. Botão "Parar" fica oculto até vigiar.
 
   const savedNick = safeStorage.get("radar:nick");
   if (savedNick && els.nickInput && !els.nickInput.value) {
