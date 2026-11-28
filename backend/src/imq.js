@@ -711,7 +711,11 @@ export class ImqClient {
     if (!Object.keys(props).length) return;
 
     this.emit({ type: "mount", queue, mount, props });
-    if (info.kind === "user_presence" || info.kind === "room_presence") {
+    if (
+      info.kind === "user_presence" ||
+      info.kind === "room_presence" ||
+      info.kind === "room_chat"
+    ) {
       this.processStateProps(queue, props, {
         mount,
         userId: String(message.user_id || ""),
