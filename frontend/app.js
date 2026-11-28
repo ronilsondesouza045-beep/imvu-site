@@ -142,6 +142,7 @@
     lookStatus: $("#lookStatus"),
     lookError: $("#lookError"),
     lookResult: $("#lookResult"),
+    lookPrivacyNote: $("#lookPrivacyNote"),
     lookSingle: $("#lookSingle"),
     lookGallery: $("#lookGallery"),
     lookModal: $("#lookModal"),
@@ -1984,14 +1985,14 @@
     return wrap;
   }
 
-  function buildLookItems(items) {
+  function buildLookItems(items, emptyText = "Nenhuma peça encontrada para este look.") {
     const grid = document.createElement("div");
     grid.className = "look-grid";
     const list = Array.isArray(items) ? items : [];
     if (!list.length) {
       const empty = document.createElement("div");
       empty.className = "look-grid-empty";
-      empty.textContent = "Nenhuma peça encontrada para este look.";
+      empty.textContent = emptyText;
       grid.appendChild(empty);
       return grid;
     }
@@ -2068,7 +2069,13 @@
     info.className = "look-summary-info";
     const eyebrow = document.createElement("div");
     eyebrow.className = "eyebrow-sm";
-    eyebrow.textContent = avatar?.current ? "Look atual" : "Avatar salvo";
+    eyebrow.textContent = avatar?.current
+      ? "Look atual"
+      : avatar?.source === "history"
+        ? "Look capturado"
+        : avatar?.source === "scrape"
+          ? "Look público"
+          : "Avatar salvo";
     const title = document.createElement("h2");
     title.className = "font-display";
     title.textContent = avatar?.name || data.display_name || data.nick || "—";
@@ -2078,11 +2085,16 @@
     const total = document.createElement("div");
     total.className = "look-total";
     const totalValue = Number(avatar?.total_credits ?? data.total_credits) || 0;
-    total.textContent = `💰 Valor Total: ${totalValue.toLocaleString("pt-BR")} créditos`;
+    const itemCount = Array.isArray(avatar?.items) ? avatar.items.length : 0;
+    const itemsAvailable = avatar?.items_available !== false && itemCount > 0;
+    total.textContent = itemsAvailable
+      ? `💰 Valor Total: ${totalValue.toLocaleString("pt-BR")} créditos`
+      : "Itens indisponíveis";
     const count = document.createElement("div");
     count.className = "look-count";
-    const itemCount = Array.isArray(avatar?.items) ? avatar.items.length : 0;
-    count.textContent = `${itemCount === 1 ? "1 item" : `${itemCount} itens`} · avatar completo`;
+    count.textContent = itemsAvailable
+      ? `${itemCount === 1 ? "1 item" : `${itemCount} itens`} · avatar completo`
+      : "Itens não capturados";
     const warning = document.createElement("p");
     warning.className = "look-warning";
     warning.textContent =
@@ -2102,7 +2114,14 @@
     pill.textContent = String(itemCount);
     head.append(headLabel, pill);
     fragment.appendChild(head);
-    fragment.appendChild(buildLookItems(avatar?.items));
+    fragment.appendChild(
+      buildLookItems(
+        avatar?.items,
+        avatar?.source === "scrape" && !itemsAvailable
+          ? "Itens não capturados para este look público."
+          : undefined
+      )
+    );
     return fragment;
   }
 
@@ -2130,11 +2149,15 @@
       item_count: data.item_count || 0,
       items: Array.isArray(data.items) ? data.items : [],
       current: true,
+      source: "current",
+      items_available: true,
     };
     const avatars =
       Array.isArray(data.avatars) && data.avatars.length ? data.avatars : [fallbackAvatar];
 
     els.lookResult?.classList.remove("hidden");
+    const showPrivacyNote = Boolean(data.history_used) || Number(data.scraped_count) > 0;
+    els.lookPrivacyNote?.classList.toggle("hidden", !showPrivacyNote);
 
     if (avatars.length === 1) {
       els.lookGallery?.classList.add("hidden");
@@ -2178,18 +2201,32 @@
       body.className = "look-avatar-card-body";
       const badge = document.createElement("span");
       badge.className = "look-avatar-card-badge";
-      badge.textContent = avatar.current ? "Atual" : "Salvo";
+      badge.textContent = avatar.current
+        ? "Atual"
+        : avatar.source === "history"
+          ? "Histórico"
+          : avatar.source === "scrape"
+            ? "Público"
+            : "Salvo";
       const name = document.createElement("h3");
       name.className = "look-avatar-card-name";
       name.textContent = avatar.name || "Look";
       const total = document.createElement("div");
       total.className = "look-avatar-card-total";
       const totalValue = Number(avatar.total_credits) || 0;
-      total.textContent = `💰 ${totalValue.toLocaleString("pt-BR")} créditos`;
+      const itemCount = Array.isArray(avatar.items) ? avatar.items.length : 0;
+      const itemsAvailable = avatar.items_available !== false && itemCount > 0;
+      total.textContent = itemsAvailable
+        ? `💰 ${totalValue.toLocaleString("pt-BR")} créditos`
+        : "Itens indisponíveis";
       const count = document.createElement("div");
       count.className = "look-avatar-card-count";
-      const itemCount = Array.isArray(avatar.items) ? avatar.items.length : 0;
-      count.textContent = itemCount === 1 ? "1 item" : `${itemCount} itens`;
+      count.textContent =
+        avatar.source === "scrape" && !itemsAvailable
+          ? "Itens não capturados"
+          : itemCount === 1
+            ? "1 item"
+            : `${itemCount} itens`;
       const button = document.createElement("button");
       button.type = "button";
       button.className = "btn-primary look-avatar-card-btn";

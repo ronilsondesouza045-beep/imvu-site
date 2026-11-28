@@ -1,5 +1,6 @@
 ﻿import { ImvuApi, safeNick } from "./imvu.js";
 import { ImqClient, isLeftAction, isLiveAction, parseRoomId } from "./imq.js";
+import { saveLookHistory } from "./lookHistory.js";
 import {
   findRooms as catvuFind,
   fetchRoomSnapshot as catvuRoomSnapshot,
@@ -341,6 +342,8 @@ export class RadarTracker {
       catvuSnapshotLoading: false,
       pendingJoins: new Set(),
       catvuLastTry: 0,
+      lookHistoryDay: "",
+      lookHistoryPromise: null,
       createdAt: now(),
     };
   }
@@ -1494,6 +1497,7 @@ export class RadarTracker {
     this.broadcast(track, this.roomMessage(track));
     this.broadcast(track, this.statusMessage(track, "online", track.statusMsg));
     this.log.info(`[tracker] ${track.nick} -> ${fallbackRoom.name || id} (${id}) via ${via}`);
+    this.captureLookHistory(track);
 
     // Hook externo (ex.: alertas do Telegram). Nao interfere no fluxo do radar.
     if (typeof this.onRoomChange === "function") {
@@ -1575,6 +1579,41 @@ export class RadarTracker {
     }
 
     return true;
+  }
+
+  /**
+   * Captura o look atual quando o alvo e encontrado em uma sala.
+   * No maximo uma vez por dia por cid (upsert no SQLite tambem deduplica).
+   */
+  captureLookHistory(track) {
+    if (!track || this.tracks.get(track.cid) !== track) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    if (track.lookHistoryDay === today) return null;
+    if (track.lookHistoryPromise) return track.lookHistoryPromise;
+    track.lookHistoryDay = today;
+    track.lookHistoryPromise = (async () => {
+      await sleep(1_500);
+      if (this.tracks.get(track.cid) !== track) return;
+      const look = await this.api
+        .extractLook(track.nick, { currentOnly: true })
+        .catch(() => null);
+      const current = look?.avatars?.find((avatar) => avatar.current) || look?.avatars?.[0];
+      if (!current?.image_url) {
+        track.lookHistoryDay = "";
+        return;
+      }
+      const saved = saveLookHistory(track.cid, current.image_url, current.items || []);
+      if (saved) {
+        this.log.info(
+          `[look] historico capturado: ${track.nick} (${current.item_count} itens, ${current.total_credits} creditos)`
+        );
+      }
+    })()
+      .catch(() => {})
+      .finally(() => {
+        track.lookHistoryPromise = null;
+      });
+    return track.lookHistoryPromise;
   }
 
   mergeOccupant(previous, incoming) {

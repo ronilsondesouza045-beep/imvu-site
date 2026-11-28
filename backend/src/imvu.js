@@ -1,4 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { scrapingOutfits } from "./lookScraper.js";
+import { getLookHistory } from "./lookHistory.js";
 
 export const API = "https://api.imvu.com";
 export const ASSET_BASE = "https://asset-server-akm.imvu.com";
@@ -113,6 +115,18 @@ function normalizeUrl(value) {
   if (s.startsWith("//")) return "https:" + s;
   return s;
 }
+
+const formatHistoryDate = (value) => {
+  const raw = String(value || "").slice(0, 10);
+  const [year, month, day] = raw.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : "";
+};
+
+const avatarSignature = (avatar) =>
+  `${avatar?.image_url || ""}|${(Array.isArray(avatar?.items) ? avatar.items : [])
+    .map((item) => String(item?.id || item?.name || ""))
+    .sort()
+    .join(",")}`;
 
 function absoluteAssetUrl(value) {
   const raw = String(value || "").trim();
@@ -689,10 +703,10 @@ export class ImvuApi {
     return { outfits, status };
   }
 
-  async extractLook(nick) {
+  async extractLook(nick, { currentOnly = false } = {}) {
     const clean = safeNick(nick);
     if (!clean) return null;
-    const cacheKey = clean.toLowerCase();
+    const cacheKey = `${clean.toLowerCase()}${currentOnly ? ":current" : ""}`;
     const cached = this.lookCache.get(cacheKey);
     if (cached && now() - cached.at < LOOK_TTL) return cached.result;
 
@@ -701,11 +715,15 @@ export class ImvuApi {
     const cid = String(person.cid);
     if (!/^\d+$/.test(cid)) return null;
 
-    const [userNode, outfitEnv, outfitsResult] = await Promise.all([
+    const [userNode, outfitEnv, outfitsResult, scrapedImages] = await Promise.all([
       this.userNode(cid, 0).catch(() => null),
       this.getJson(`/profile_outfit/profile_outfit-${cid}`).catch(() => null),
-      this.listOutfits(cid).catch(() => ({ outfits: [], status: 0 })),
+      currentOnly
+        ? Promise.resolve({ outfits: [], status: 0 })
+        : this.listOutfits(cid).catch(() => ({ outfits: [], status: 0 })),
+      currentOnly ? Promise.resolve([]) : scrapingOutfits(clean, cid).catch(() => []),
     ]);
+    const historyRows = currentOnly ? [] : getLookHistory(cid, 12);
 
     const outfitData =
       this.firstNode(outfitEnv, (key) => key.includes("/profile_outfit/"))?.node?.data ||
@@ -795,7 +813,72 @@ export class ImvuApi {
         item_count: items.length,
         items,
         current: Boolean(def.current),
+        source: def.current ? "current" : "saved",
+        items_available: items.length > 0,
       });
+    }
+
+    const knownImages = new Set(
+      avatars.flatMap((avatar) => [avatar.image_url, ...(avatar.image_urls || [])]).filter(Boolean)
+    );
+    const knownSignatures = new Set(avatars.map(avatarSignature));
+
+    // Scraping do perfil publico: imagens de outfits sem itens/precos.
+    // Se o historico tiver a mesma imagem, aproveita os itens capturados.
+    let scrapedCount = 0;
+    if (!currentOnly && scrapedImages.length) {
+      for (const [index, image] of scrapedImages.entries()) {
+        if (knownImages.has(image)) continue;
+        const match = historyRows.find((row) => row.image_url === image);
+        const items = match?.items || [];
+        const total =
+          match?.total_credits ||
+          items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+        const avatar = {
+          id: `scrape-${index + 1}`,
+          name: match ? `Look de ${formatHistoryDate(match.data_captura)}` : `Look público ${index + 1}`,
+          image_url: image,
+          image_urls: [image, ...avatarImages].filter(Boolean),
+          total_credits: total,
+          item_count: items.length,
+          items,
+          current: false,
+          source: "scrape",
+          items_available: items.length > 0,
+          captured_at: match?.data_captura || "",
+        };
+        avatars.push(avatar);
+        knownImages.add(image);
+        knownSignatures.add(avatarSignature(avatar));
+        scrapedCount += 1;
+      }
+    }
+
+    // Fallback: sem nada no scraping, usa os looks capturados pelo tracker.
+    let historyUsed = false;
+    let historyCount = 0;
+    if (!currentOnly && !scrapedImages.length) {
+      for (const row of historyRows) {
+        const avatar = {
+          id: `history-${row.id}`,
+          name: `Look de ${formatHistoryDate(row.data_captura)}`,
+          image_url: row.image_url,
+          image_urls: [row.image_url, ...avatarImages].filter(Boolean),
+          total_credits: row.total_credits,
+          item_count: row.item_count,
+          items: row.items,
+          current: false,
+          source: "history",
+          items_available: true,
+          captured_at: row.data_captura,
+        };
+        const signature = avatarSignature(avatar);
+        if (knownSignatures.has(signature)) continue;
+        avatars.push(avatar);
+        knownSignatures.add(signature);
+        historyUsed = true;
+        historyCount += 1;
+      }
     }
 
     const current = avatars.find((avatar) => avatar.current) || avatars[0] || null;
@@ -812,6 +895,9 @@ export class ImvuApi {
       avatars,
       outfit_count: avatars.length,
       outfits_status: outfitsResult.status || 0,
+      scraped_count: scrapedCount,
+      history_used: historyUsed,
+      history_count: historyCount,
     };
     this.lookCache.set(cacheKey, { at: now(), result });
     this.lookCache.set(cid, { at: now(), result });
