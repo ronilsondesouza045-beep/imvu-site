@@ -2906,3 +2906,413 @@ kbd {
   background: rgba(255, 255, 255, 0.12);
 }
 
+/* ============================================================
+   RESPONSIVO — celulares e tablets (até 768px)
+   Esta seção fica por último para vencer as regras antigas.
+   ============================================================ */
+
+@media (max-width: 768px) {
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  body {
+    width: 100%;
+  }
+
+  img {
+    max-width: 100%;
+  }
+
+  /* ---------- header ---------- */
+  header {
+    flex-wrap: wrap;
+    gap: 10px !important;
+    padding: 12px 12px 0 !important;
+  }
+
+  header > div:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  header > div:last-child {
+    margin-left: auto;
+  }
+
+  header .radar-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  header .font-display {
+    font-size: clamp(14px, 4.2vw, 17px) !important;
+  }
+
+  header .text-\[10px\] {
+    font-size: 9px !important;
+    letter-spacing: 0.14em !important;
+  }
+
+  .bell-btn {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    border-radius: 11px;
+  }
+
+  .conn {
+    padding: 6px 9px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  #btn-instalar-pwa {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 10px 12px;
+  }
+
+  #btn-instalar-pwa .pwa-install-label {
+    display: none;
+  }
+
+  main {
+    width: 100%;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    padding-bottom: 24px !important;
+  }
+
+  /* ---------- tipografia ---------- */
+  h1,
+  h2,
+  h3,
+  p,
+  a,
+  button,
+  span {
+    overflow-wrap: anywhere;
+  }
+
+  #hero {
+    padding: 10px 0 8px !important;
+  }
+
+  #hero h1 {
+    margin-top: 0 !important;
+    font-size: clamp(1.3rem, 6.4vw, 1.7rem) !important;
+    line-height: 1.12 !important;
+    letter-spacing: -0.01em;
+  }
+
+  #hero p {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .eyebrow {
+    padding: 5px 10px;
+    font-size: 9.5px;
+  }
+
+  #targetName {
+    font-size: clamp(1.05rem, 4.8vw, 1.25rem) !important;
+  }
+
+  #roomEmptyTitle,
+  #roomEmptyText {
+    font-size: 12px;
+  }
+
+  /* ---------- formulário de busca (empilhado) ---------- */
+  #watchForm {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .search-box {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    align-items: center;
+    width: 100%;
+    flex: none;
+    gap: 4px 10px;
+    padding: 6px 8px 8px 12px;
+    border-radius: 14px;
+  }
+
+  .search-icon {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  .search-input {
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 0;
+    font-size: 16px; /* evita zoom automático no iOS */
+  }
+
+  .search-btn {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    min-height: 44px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  #stopBtn {
+    width: 100%;
+    min-height: 44px;
+    border-radius: 10px;
+    font-size: 13px;
+  }
+
+  /* ---------- cards principais (uma coluna) ---------- */
+  #mainCards {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 12px !important;
+    margin-top: 10px;
+  }
+
+  #mainCards > *,
+  .card {
+    min-width: 0;
+  }
+
+  .card {
+    padding: 14px !important;
+    border-radius: 16px;
+  }
+
+  /* ---------- abas ---------- */
+  .view-tabs {
+    display: flex;
+    width: 100%;
+    margin-top: 12px;
+  }
+
+  .view-tab {
+    flex: 1;
+    min-height: 44px;
+    padding: 10px 6px;
+    font-size: 12px;
+  }
+
+  /* ---------- cards de sala ---------- */
+  .rooms-list {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .room-card {
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .room-card-name {
+    font-size: 15px;
+    overflow-wrap: anywhere;
+  }
+
+  .room-card-actions {
+    flex-direction: column;
+  }
+
+  .room-card-btn {
+    flex: 1 1 100%;
+    width: 100%;
+    min-height: 44px;
+    padding: 11px 12px;
+    font-size: 12.5px;
+    white-space: normal;
+  }
+
+  .room-card-link {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .room-roster {
+    gap: 6px;
+  }
+
+  /* ---------- ocupantes (2 colunas confortáveis) ---------- */
+  .occupants-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    margin-top: 10px !important;
+  }
+
+  .occupant-card {
+    gap: 8px;
+    padding: 9px;
+    border-radius: 11px;
+  }
+
+  .occupant-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 9px;
+  }
+
+  .occupant-avatar .avatar-initials {
+    font-size: 13px;
+  }
+
+  .occupant-name {
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .occupant-user {
+    font-size: 9.5px;
+  }
+
+  .vip-badge {
+    font-size: 7px;
+  }
+
+  #occupantHint {
+    display: none;
+  }
+
+  /* ---------- área de toque (mínimo 44px) ---------- */
+  .btn-primary,
+  .btn-ghost,
+  .room-card-btn,
+  .view-tab,
+  .profile-actions > *,
+  .alerts-actions button,
+  .radio-input-row .btn-primary,
+  .radio-input-row .btn-ghost {
+    min-height: 44px;
+  }
+
+  /* ---------- modal de perfil ---------- */
+  .profile-modal {
+    width: 94vw;
+    max-width: 94vw;
+    max-height: 90vh;
+    max-height: 90dvh;
+    padding: 16px;
+    border-radius: 18px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .profile-hero {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-right: 30px;
+  }
+
+  .profile-avatar {
+    width: 84px;
+    height: 98px;
+    border-radius: 14px;
+  }
+
+  .profile-name {
+    font-size: clamp(1.05rem, 5vw, 1.25rem);
+  }
+
+  .profile-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .profile-actions {
+    flex-direction: column;
+  }
+
+  .profile-actions > * {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .profile-close {
+    width: 44px;
+    height: 44px;
+    top: 8px;
+    right: 8px;
+  }
+
+  /* ---------- painel de alertas / toasts ---------- */
+  .alerts-panel {
+    width: 100%;
+    padding: 18px 14px calc(64px + env(safe-area-inset-bottom));
+  }
+
+  .panel-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .toasts {
+    top: 64px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+
+  /* ---------- rádio ---------- */
+  .radio-input-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .radio-input-row .btn-primary,
+  .radio-input-row .btn-ghost {
+    width: 100%;
+  }
+
+  .radio-link-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .radio-link-row .btn-ghost {
+    width: 100%;
+  }
+
+  .radio-hero h1 {
+    font-size: clamp(1.35rem, 6vw, 1.6rem);
+  }
+
+  /* ---------- modais genéricos ---------- */
+  .cinema-modal {
+    inset: 8px;
+  }
+
+  .pwa-help {
+    padding: 12px;
+  }
+
+  .pwa-help-card {
+    width: 100%;
+    max-width: 100%;
+    padding: 20px 16px;
+  }
+
+  .pwa-help-card h2 {
+    font-size: 18px;
+  }
+
+  .pwa-help-close,
+  #pwaHelpOk {
+    min-height: 44px;
+  }
+}
+
+
