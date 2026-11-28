@@ -13,7 +13,8 @@ const b64d = (value) => {
 const LIVE_ACTIONS = new Set(["updated", "created", "joined"]);
 const LEFT_ACTIONS = new Set(["deleted", "left"]);
 const ROOM_PROP_KEYS = ["room", "room_id", "location", "current_room", "chat_room"];
-const RECONNECT_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+// Reconexao agressiva no primeiro erro (3s), com backoff depois.
+const RECONNECT_MS = [3_000, 3_000, 6_000, 12_000, 30_000, 60_000];
 
 /**
  * Extrai um roomId (`<cid>-<n>`) de um valor cru, URL (`.../room-123-4`)
@@ -281,7 +282,7 @@ export class ImqClient {
     if (this.stopped || this.reconnectTimer) return;
     const wait = RECONNECT_MS[Math.min(this.attempt, RECONNECT_MS.length - 1)];
     this.attempt += 1;
-    this.log.info(`[imq] reconectando em ${Math.round(wait / 1000)}s`);
+    this.log.info(`[IMQ] reconectando em ${Math.round(wait / 1000)}s (tentativa ${this.attempt + 1})`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.connect();

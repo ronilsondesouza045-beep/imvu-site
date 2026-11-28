@@ -19,16 +19,19 @@ const OWN_ROOM_SCAN = envInt("OWN_ROOM_SCAN", 120);
 const OWN_DEADLINE_MS = envInt("OWN_SCAN_DEADLINE_MS", 12_000);
 const CATVU_RETRY_MS = envInt("CATVU_RETRY_MS", 20_000);
 const TARGET_ROOM_SCAN = envInt("TARGET_ROOM_SCAN", 800);
-const PROBE_INTERVAL_MS = envInt("PROBE_INTERVAL_MS", 15_000);
+const PROBE_INTERVAL_MS = envInt("PROBE_INTERVAL_MS", 120_000);
 const PROBE_TIMEOUT_MS = envInt("PROBE_TIMEOUT_MS", 12_000);
-// Com salas ativas, refaz a varredura das filas chat-<cid>-* para descobrir
-// salas adicionais (multi-room). Sem sala, o probe continua a cada 15s.
-const MULTI_PROBE_MS = envInt("MULTI_PROBE_MS", 60_000);
+// Com salas ativas, refaz a sondagem das filas chat-<cid>-* para descobrir
+// salas adicionais (multi-room). IMQ e a fonte primaria; isso e so fallback.
+const MULTI_PROBE_MS = envInt("MULTI_PROBE_MS", 120_000);
+// Janela de graca do IMQ no inicio do watch: se nenhum evento de sala chegar
+// nesse tempo, o fallback (friends/relation/lists/scan) e acionado.
+const IMQ_GRACE_MS = envInt("IMQ_GRACE_MS", 10_000);
 // Estado "oculto" nao pode ser permanente: a privacidade do alvo pode mudar
 // (Show Current Room) ou a sala pode ficar visivel depois. Recheca a cada 60s.
 const HIDDEN_RETRY_MS = envInt("HIDDEN_RETRY_MS", 60_000);
 // Varredura ativa de salas publicas (recent/explore/feature) para achar o
-// alvo sem depender do current_room.
+// alvo sem depender do current_room. Fallback: no maximo a cada 2 minutos.
 const PUBLIC_SCAN_MS = envInt("PUBLIC_SCAN_MS", 120_000);
 // Diretorio de chat profundo: a sala do alvo pode estar na pagina 24+.
 const PUBLIC_SCAN_LIMIT = envInt("PUBLIC_SCAN_LIMIT", 1000);
@@ -38,8 +41,9 @@ const PUBLIC_SCAN_CONCURRENCY = envInt("PUBLIC_SCAN_CONCURRENCY", 8);
 const PUBLIC_SCAN_BATCH = envInt("PUBLIC_SCAN_BATCH", 400);
 // No maximo N alvos com varredura profunda ao mesmo tempo.
 const PUBLIC_SCAN_TRACKS = envInt("PUBLIC_SCAN_TRACKS", 2);
-// Leitura da relation current_room a cada 5s: detecta troca de sala rapido.
-const ROOM_REFRESH_MS = envInt("ROOM_REFRESH_MS", 5_000);
+// Fallback de seguranca: o IMQ entrega as mudancas em tempo real. A relation
+// current_room so e relida a cada 2 minutos para corrigir dessincronizacao.
+const ROOM_REFRESH_MS = envInt("ROOM_REFRESH_MS", 120_000);
 // Roster HTTP e metadados continuam mais espacados para nao estourar rate limit.
 const ROSTER_REFRESH_MS = envInt("ROSTER_REFRESH_MS", 15_000);
 // Lista de salas dos amigos: fonte real quando current_room nao existe.
@@ -231,6 +235,7 @@ export class RadarTracker {
       track.watchers.add(client);
       client.send(this.watchingMessage(track));
       this.emitStatus(track, "loading", "Procurando sala atual...");
+      this.log.info(`[IMQ] ${profile.username} (${profile.cid}): assinando chat-${profile.cid}-* + presence`);
       this.imq.addTarget(profile.cid);
       this.startTimers(track);
       this.startSync(track);
@@ -276,6 +281,9 @@ export class RadarTracker {
       syncBackoffUntil: 0,
       presenceRoom: "",
       presenceRoomAt: 0,
+      lastImqRoomAt: 0,
+      imqWaitPromise: null,
+      imqWaitTimer: null,
       lastLeftRoom: "",
       lastLeftAt: 0,
       lastRosterRefreshAt: 0,
@@ -590,64 +598,50 @@ export class RadarTracker {
   }
 
   async initialSync(track, gen) {
-    const cid = track.cid;
     const active = () => this.isActive(track, gen);
 
-    // Fontes extras rodam em paralelo sem furar a prioridade:
-    // catvu (indice externo) e current_room (fallback).
-    track.catvuLastTry = now();
-    const catvuPromise = catvuFind(track.nick, { timeout: 10_000, force: true }).catch(() => null);
-    const relationPromise = this.api.currentRoom(cid, 0).catch(() => "");
+    // 0) FAST-PATH: o IMQ ja foi assinado no watch (chat-<cid>-* +
+    // presence-<cid>). Damos uma janela curta para ele entregar a sala.
+    track.imqWatchStartedAt = now();
+    this.emitStatus(track, "loading", "Ouvindo IMQ em tempo real...");
+    this.log.info(
+      `[IMQ] ${track.nick} (${track.cid}): aguardando evento de sala (${IMQ_GRACE_MS / 1000}s)`
+    );
 
-    // 1) Lista de amigos do bot: o IMVU denormaliza a sala atual de cada
-    // amigo. Inclui o fallback de sala privada (roster 403) do Tracker.kt.
-    this.emitStatus(track, "loading", "Consultando salas dos amigos...");
+    if (await this.waitForImqRoom(track, IMQ_GRACE_MS)) {
+      if (!active()) return;
+      const elapsed = now() - (track.imqWatchStartedAt || track.createdAt || now());
+      this.log.info(
+        `[IMQ] ${track.nick}: sala ${track.room?.roomId || ""} detectada em ${elapsed}ms; varredura publica cancelada`
+      );
+      this.scheduleBackgroundDiscovery(track, gen);
+      return;
+    }
+    if (!active()) return;
+
+    // 1) FALLBACK: IMQ silencioso por 10s. Fontes baratas primeiro.
+    this.log.info(
+      `[IMQ] ${track.nick}: nenhum evento em ${IMQ_GRACE_MS / 1000}s; ativando fallback`
+    );
+    this.emitStatus(track, "loading", "IMQ sem eventos; consultando salas dos amigos...");
     if (await this.checkFriendsRoom(track)) {
       this.scheduleBackgroundDiscovery(track, gen);
       return;
     }
     if (!active()) return;
 
-    // 2) Varredura ativa das salas publicas mais movimentadas.
-    this.emitStatus(track, "loading", "Varrendo salas publicas...");
-    if (await this.scanPublicRooms(track, { force: true })) {
-      this.scheduleBackgroundDiscovery(track, gen);
-      return;
-    }
+    // 2) Sondagem IMQ: relation current_room + catvu + filas chat-<cid>-*.
+    this.emitStatus(track, "loading", "Sondando canais em tempo real...");
+    await this.probeTick(track);
     if (!active()) return;
-
-    // 3) current_room do perfil como fallback (pode estar oculto).
-    this.emitStatus(track, "loading", "Lendo sala atual no IMVU...");
-    let relationRoom = await relationPromise;
-    if (!active()) return;
-    if (
-      relationRoom === `${cid}-1` &&
-      track.presenceRoom &&
-      track.presenceRoom !== relationRoom
-    ) {
-      relationRoom = track.presenceRoom;
-    }
-    if (relationRoom) {
-      await this.setRoom(track, relationRoom, { via: "user_relation", gen });
+    if (track.rooms.size) {
       this.scheduleBackgroundDiscovery(track, gen);
       return;
     }
 
-    // 4) Catvu find: sala exata, sem depender de evento de movimento.
-    this.emitStatus(track, "loading", "Consultando indice de salas (catvu)...");
-    const catvu = await catvuPromise;
-    if (catvu?.rooms?.length) {
-      this.emitStatus(track, "loading", "Catvu: sala localizada, lendo ocupantes...");
-      if (await this.applyCatvuResult(track, catvu, gen)) {
-        this.scheduleBackgroundDiscovery(track, gen);
-        return;
-      }
-    }
-    if (!active()) return;
-
-    // 5) Listas oficiais: friends / recent / explore.
+    // 3) Listas oficiais: friends / recent / explore.
     this.emitStatus(track, "loading", "Varrendo listas oficiais...");
-    const listHits = await this.api.findInLists(cid, ["friends", "recent", "explore"], {
+    const listHits = await this.api.findInLists(track.cid, ["friends", "recent", "explore"], {
       deadlineMs: now() + LIST_DEADLINE_MS,
       stopOnFirst: true,
       concurrency: 5,
@@ -664,9 +658,9 @@ export class RadarTracker {
       return;
     }
 
-    // 6) Salas proprias do alvo com ocupacao > 0.
+    // 4) Salas proprias do alvo com ocupacao > 0.
     this.emitStatus(track, "loading", "Varrendo salas do alvo...");
-    const ownHits = await this.api.findInOwnRooms(cid, OWN_ROOM_SCAN, {
+    const ownHits = await this.api.findInOwnRooms(track.cid, OWN_ROOM_SCAN, {
       deadlineMs: now() + OWN_DEADLINE_MS,
       concurrency: 6,
     });
@@ -681,19 +675,19 @@ export class RadarTracker {
       return;
     }
 
-    // 7) Probe do IMQ: filas chat-<cid>-* vivas.
-    this.emitStatus(track, "loading", "Sondando canais em tempo real...");
-    await this.probeTick(track);
-    if (!active()) return;
-    if (track.rooms.size) {
-      this.scheduleBackgroundDiscovery(track, gen);
-      return;
-    }
-
-    // Nenhuma fonte devolveu sala. Se o alvo esta online, o IMVU esta
-    // ocultando a localizacao (Show Current Room = Profile Only/None).
+    // 5) Ultimo recurso: varredura publica em background, no maximo 1x/2min.
+    // Nao bloqueia o watch; se achar a sala, o card entra na hora.
     if (track.profile?.online !== false) {
-      this.markLocationHidden(track, "current_room ausente e nenhuma sala encontrada");
+      this.emitStatus(track, "loading", "IMQ sem eventos; varrendo salas públicas em segundo plano...");
+      this.scanPublicRooms(track)
+        .then((found) => {
+          if (!this.isActive(track, gen) || found || track.rooms.size) return;
+          this.markLocationHidden(track, "current_room ausente e nenhuma sala encontrada");
+        })
+        .catch(() => {
+          if (!this.isActive(track, gen) || track.rooms.size) return;
+          this.markLocationHidden(track, "falha na varredura de salas públicas");
+        });
       return;
     }
 
@@ -705,6 +699,40 @@ export class RadarTracker {
       message: "Sem sala no momento",
       at: now(),
     });
+  }
+
+  /**
+   * Espera ate `timeoutMs` por uma sala vinda do IMQ (track.rooms preenchido).
+   * Resolve true assim que o fast-path publica a primeira sala.
+   */
+  waitForImqRoom(track, timeoutMs) {
+    if (track.rooms.size) return Promise.resolve(true);
+    if (track.imqWaitPromise) return track.imqWaitPromise;
+    const started = now();
+    track.imqWaitPromise = new Promise((resolve) => {
+      track.imqWaitTimer = setInterval(() => {
+        if (this.tracks.get(track.cid) !== track) {
+          clearInterval(track.imqWaitTimer);
+          track.imqWaitTimer = null;
+          resolve(false);
+          return;
+        }
+        if (track.rooms.size) {
+          clearInterval(track.imqWaitTimer);
+          track.imqWaitTimer = null;
+          resolve(true);
+          return;
+        }
+        if (now() - started >= timeoutMs) {
+          clearInterval(track.imqWaitTimer);
+          track.imqWaitTimer = null;
+          resolve(false);
+        }
+      }, 150);
+    }).finally(() => {
+      track.imqWaitPromise = null;
+    });
+    return track.imqWaitPromise;
   }
 
   /**
@@ -873,9 +901,9 @@ export class RadarTracker {
       await sleep(400);
       if (!this.isActive(track, gen)) return;
       const tasks = [this.discoverOwnRooms(track, gen)];
-      if (now() - (track.lastPublicScanAt || 0) >= PUBLIC_SCAN_MS || !track.rooms.size) {
-        tasks.push(this.scanPublicRooms(track, { force: true }));
-      }
+      // Se o IMQ (ou qualquer fonte) ja achou sala, a varredura publica fica
+      // cancelada. Ela so roda quando ainda nao ha nenhuma sala — fallback real.
+      if (!track.rooms.size) tasks.push(this.scanPublicRooms(track));
       await Promise.allSettled(tasks);
     })()
       .catch(() => {})
@@ -913,6 +941,11 @@ export class RadarTracker {
   async scanPublicRooms(track, { force = false } = {}) {
     if (this.tracks.get(track.cid) !== track) return false;
     if (track.locationHidden) return false;
+    // Fast-path ja achou sala: nao gasta recurso varrendo o diretorio.
+    if (track.rooms.size) {
+      this.log.info(`[IMQ] varredura ignorada: sala de ${track.nick} ja detectada`);
+      return true;
+    }
     if (track.publicScanPromise) return track.publicScanPromise;
     if (!force && now() - (track.lastPublicScanAt || 0) < PUBLIC_SCAN_MS) return false;
     track.lastPublicScanAt = now();
@@ -930,6 +963,10 @@ export class RadarTracker {
           .publicRoomCandidates({ limit: PUBLIC_SCAN_LIMIT })
           .catch(() => []);
         if (this.tracks.get(track.cid) !== track) return false;
+        if (track.rooms.size) {
+          this.log.info(`[IMQ] varredura cancelada: sala de ${track.nick} ja detectada`);
+          return true;
+        }
         if (!candidates.length) return false;
 
         let window = candidates;
@@ -948,6 +985,7 @@ export class RadarTracker {
         const deadline = now() + PUBLIC_SCAN_DEADLINE_MS;
         const showProgress = force || track.rooms.size === 0;
         let found = false;
+        let cancelled = false;
         let scanned = 0;
         let index = 0;
         let lastProgressAt = now();
@@ -967,6 +1005,13 @@ export class RadarTracker {
           Array.from({ length: Math.min(PUBLIC_SCAN_CONCURRENCY, window.length) }, async () => {
             while (true) {
               if (this.tracks.get(track.cid) !== track) return;
+              if (track.rooms.size) {
+                if (!cancelled) {
+                  cancelled = true;
+                  this.log.info(`[IMQ] varredura cancelada: sala de ${track.nick} ja detectada`);
+                }
+                return;
+              }
               if (now() > deadline) return;
               const i = index++;
               if (i >= window.length) return;
@@ -1039,15 +1084,8 @@ export class RadarTracker {
     track.syncPromise = (async () => {
       if (track.syncBackoffUntil && now() < track.syncBackoffUntil) return false;
 
-      // 1) Lista de amigos do bot (fonte oficial, ja denormalizada).
-      if (await this.checkFriendsRoom(track)) return true;
-      if (this.tracks.get(track.cid) !== track) return false;
-
-      // 2) Varredura ativa das salas publicas mais movimentadas.
-      if (await this.scanPublicRooms(track)) return true;
-      if (this.tracks.get(track.cid) !== track) return false;
-
-      // 3) current_room do perfil como fallback (pode estar oculto).
+      // 1) current_room: uma request barata. O IMQ entrega o tempo real;
+      // isso so corrige uma eventual dessincronizacao (no maximo 1x/2min).
       const rid = await this.api.currentRoom(track.cid, 0).catch(() => "");
       if (this.tracks.get(track.cid) !== track) return false;
 
@@ -1058,48 +1096,55 @@ export class RadarTracker {
           return false;
         }
         track.syncBackoffUntil = 0;
-        return false;
-      }
+      } else {
+        track.syncBackoffUntil = 0;
+        const existing = track.rooms.get(rid);
+        if (existing) {
+          // current_room aponta para uma sala ja ativa: so reafirma o frescor.
+          existing.lastSeenAt = now();
+          this.selectPrimary(track);
+          return true;
+        }
 
-      track.syncBackoffUntil = 0;
-      const existing = track.rooms.get(rid);
-      if (existing) {
-        // current_room aponta para uma sala ja ativa: so reafirma o frescor.
-        existing.lastSeenAt = now();
-        this.selectPrimary(track);
+        // My Room na relation costuma ficar "presa" enquanto o alvo esta em
+        // sala de terceiro. A presenca fresca do IMQ vence essa leitura.
+        const relationMyRoom = rid === `${track.cid}-1`;
+        if (relationMyRoom) {
+          const presenceFresh = Boolean(
+            track.presenceRoom &&
+              track.presenceRoom !== rid &&
+              now() - (track.presenceRoomAt || 0) < PRESENCE_TRUST_MS
+          );
+          if (presenceFresh) return false;
+        }
+
+        // Nao reabre a sala que o alvo acabou de sair (evento left do IMQ).
+        if (rid === track.lastLeftRoom && now() - (track.lastLeftAt || 0) < LEFT_ROOM_GRACE_MS) {
+          return false;
+        }
+
+        // Relation em sala normal confirma a leitura: descarta presenca antiga
+        // para ela nao bloquear uma futura volta do alvo para a My Room.
+        if (!relationMyRoom) {
+          track.presenceRoom = "";
+          track.presenceRoomAt = 0;
+        }
+
+        // setRoom publica a sala de forma sincrona (antes do primeiro await).
+        this.setRoom(track, rid, { via: "user_relation", gen: track.gen }).catch((error) => {
+          this.log.warn(`[tracker] setRoom(${rid}) falhou: ${error?.message || error}`);
+        });
         return true;
       }
 
-      // My Room na relation costuma ficar "presa" enquanto o alvo esta em
-      // sala de terceiro. A presenca fresca do IMQ vence essa leitura.
-      const relationMyRoom = rid === `${track.cid}-1`;
-      if (relationMyRoom) {
-        const presenceFresh = Boolean(
-          track.presenceRoom &&
-            track.presenceRoom !== rid &&
-            now() - (track.presenceRoomAt || 0) < PRESENCE_TRUST_MS
-        );
-        if (presenceFresh) return false;
-      }
+      // 2) Lista de amigos do bot: fonte oficial denormalizada.
+      if (await this.checkFriendsRoom(track)) return true;
+      if (this.tracks.get(track.cid) !== track) return false;
 
-      // Nao reabre a sala que o alvo acabou de sair (evento left do IMQ).
-      if (rid === track.lastLeftRoom && now() - (track.lastLeftAt || 0) < LEFT_ROOM_GRACE_MS) {
-        return false;
-      }
-
-      // Relation em sala normal confirma a leitura: descarta presenca antiga
-      // para ela nao bloquear uma futura volta do alvo para a My Room.
-      if (!relationMyRoom) {
-        track.presenceRoom = "";
-        track.presenceRoomAt = 0;
-      }
-
-      // setRoom publica a sala de forma sincrona (antes do primeiro await).
-      // Nao seguramos o polling de 5s esperando metadata/roster da sala.
-      this.setRoom(track, rid, { via: "user_relation", gen: track.gen }).catch((error) => {
-        this.log.warn(`[tracker] setRoom(${rid}) falhou: ${error?.message || error}`);
-      });
-      return true;
+      // 3) Varredura publica: so sem nenhuma sala e respeitando o throttle
+      // de PUBLIC_SCAN_MS (2 minutos).
+      if (!track.rooms.size && (await this.scanPublicRooms(track))) return true;
+      return false;
     })()
       .catch(() => false)
       .finally(() => {
@@ -1236,7 +1281,7 @@ export class RadarTracker {
     this.roomRefs.set(rid, count + 1);
     if (count === 0) {
       this.imq.addRoom(rid);
-      this.log.info(`[tracker] assinando chat-${rid} + presence-${rid}`);
+      this.log.info(`[IMQ] assinando chat-${rid} + presence-${rid}`);
     }
   }
 
@@ -1932,10 +1977,10 @@ export class RadarTracker {
         this.onState(event);
         break;
       case "imq_ready":
-        this.log.info("[tracker] IMQ pronto");
+        this.log.info("[IMQ] conectado e pronto para eventos");
         break;
       case "imq_error":
-        this.log.warn(`[tracker] erro IMQ: ${event.message}`);
+        this.log.warn(`[IMQ] erro: ${event.message}`);
         break;
       default:
         break;
@@ -1955,13 +2000,21 @@ export class RadarTracker {
           // quando ela estiver presa na My Room. Cada sala vira um card.
           track.presenceRoom = room;
           track.presenceRoomAt = now();
+          track.lastImqRoomAt = now();
           const existing = track.rooms.get(room);
           if (existing) {
             existing.lastSeenAt = now();
           } else {
-            this.scheduleRoomLoad(track, room, "imq");
+            const elapsed = now() - (track.imqWatchStartedAt || track.createdAt || now());
+            this.log.info(
+              `[IMQ] ${track.nick} (${track.cid}): sala ${room} via ${event.source || "imq"} em ${elapsed}ms`
+            );
+            this.scheduleRoomLoad(track, room, "imq", { immediate: true });
           }
         } else if (isLeftAction(action)) {
+          this.log.info(
+            `[IMQ] ${track.nick} (${track.cid}): saiu da sala ${room} (${event.source || "imq"})`
+          );
           if (track.presenceRoom === room) {
             track.presenceRoom = "";
             track.presenceRoomAt = 0;
@@ -2016,16 +2069,18 @@ export class RadarTracker {
       if (track.cid !== cid) continue;
       track.presenceRoom = room;
       track.presenceRoomAt = now();
+      track.lastImqRoomAt = now();
       const existing = track.rooms.get(room);
       if (existing) {
         existing.lastSeenAt = now();
       } else {
-        this.scheduleRoomLoad(track, room, "presence");
+        this.log.info(`[IMQ] ${track.nick} (${track.cid}): state aponta para sala ${room}`);
+        this.scheduleRoomLoad(track, room, "presence", { immediate: true });
       }
     }
   }
 
-  scheduleRoomLoad(track, rid, source) {
+  scheduleRoomLoad(track, rid, source, { immediate = false } = {}) {
     if (this.tracks.get(track.cid) !== track) return;
     const id = String(rid || "");
     if (!/^\d+-\d+$/.test(id)) return;
@@ -2040,7 +2095,7 @@ export class RadarTracker {
       this.setRoom(track, id, { via: source, gen: track.gen }).catch((error) => {
         this.log.warn(`[tracker] setRoom(${id}) falhou: ${error?.message || error}`);
       });
-    }, 300);
+    }, immediate ? 0 : 300);
     track.pendingRoomLoads.set(id, { timer, source });
   }
 
