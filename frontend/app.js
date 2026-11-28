@@ -1533,7 +1533,7 @@
             "pt-BR"
           );
         })
-        .slice(0, 8);
+        .slice(0, 50);
       for (const person of sorted) {
         const chip = document.createElement("span");
         chip.className = `room-roster-chip${person.cid === targetCid ? " is-target" : ""}`;

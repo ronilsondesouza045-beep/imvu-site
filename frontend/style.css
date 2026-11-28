@@ -639,6 +639,11 @@ kbd {
   gap: 8px;
 }
 
+.room-card-head .tag {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .room-card-name {
   display: -webkit-box;
   min-width: 0;
@@ -714,6 +719,14 @@ kbd {
   border-color: rgba(167, 139, 250, 0.45);
   background: rgba(139, 92, 246, 0.14);
   color: #ddd6fe;
+}
+
+/* Nome do chip: uma linha, com reticencias; nome completo fica no title. */
+.room-roster-chip > span {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .room-roster-avatar {
@@ -3116,35 +3129,66 @@ kbd {
   }
 
   .room-card {
-    padding: 12px;
-    border-radius: 14px;
+    gap: 7px;
+    padding: 10px;
+    border-radius: 13px;
+  }
+
+  .room-card-head {
+    gap: 6px;
   }
 
   .room-card-name {
-    font-size: 15px;
-    overflow-wrap: anywhere;
+    font-size: 14px;
+    line-height: 1.2;
+    -webkit-line-clamp: 1;
   }
 
+  .room-card-meta {
+    font-size: 9.5px;
+  }
+
+  /* Mantem os 3 botoes na mesma linha, compactos como no desktop. */
   .room-card-actions {
-    flex-direction: column;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 4px;
   }
 
   .room-card-btn {
-    flex: 1 1 100%;
-    width: 100%;
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
     min-height: 44px;
-    padding: 11px 12px;
-    font-size: 12.5px;
-    white-space: normal;
+    padding: 10px 3px;
+    font-size: 10.5px;
+    white-space: nowrap;
   }
 
   .room-card-link {
-    overflow-wrap: anywhere;
-    white-space: normal;
+    padding: 5px 7px;
+    overflow: hidden;
+    font-size: 9.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .room-roster {
-    gap: 6px;
+    gap: 4px;
+  }
+
+  .room-roster-chip {
+    padding: 2px 6px 2px 2px;
+    font-size: 9.5px;
+  }
+
+  .room-roster-chip > span {
+    max-width: 104px;
+  }
+
+  .room-roster-avatar {
+    width: 16px;
+    height: 16px;
   }
 
   /* ---------- ocupantes (2 colunas confortáveis) ---------- */
