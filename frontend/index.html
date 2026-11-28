@@ -421,30 +421,24 @@
           <div id="lookError" class="look-error hidden" role="alert"></div>
 
           <div id="lookResult" class="hidden">
-            <div class="look-summary">
-              <div class="look-avatar-wrap">
-                <span id="lookAvatarFallback" class="look-avatar-fallback" aria-hidden="true">?</span>
-                <img id="lookAvatar" alt="Avatar do look" loading="lazy" referrerpolicy="no-referrer" />
-              </div>
-              <div class="look-summary-info">
-                <div class="eyebrow-sm">Look de</div>
-                <h2 id="lookName" class="font-display">—</h2>
-                <p id="lookCid" class="mono">cid —</p>
-                <div id="lookTotal" class="look-total">💰 Valor Total: 0 créditos</div>
-                <div id="lookCount" class="look-count">0 itens</div>
-                <p class="look-warning">
-                  ⚠️ O valor pode variar se o item estiver em promoção ou se a conta for VIP (que tem desconto).
-                </p>
-              </div>
-            </div>
-
-            <div class="look-items-head">
-              <div class="eyebrow-sm">Peças do look</div>
-              <span id="lookItemsCount" class="count-pill">0</span>
-            </div>
-            <div id="lookItems" class="look-grid" aria-live="polite"></div>
+            <div id="lookGallery" class="look-gallery hidden" aria-live="polite"></div>
+            <div id="lookSingle" class="look-single hidden"></div>
           </div>
         </section>
+      </div>
+
+      <div
+        id="lookModal"
+        class="look-modal hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Detalhes do look"
+        aria-hidden="true"
+      >
+        <div class="look-modal-card">
+          <button id="lookModalClose" class="look-modal-close" type="button" aria-label="Fechar">×</button>
+          <div id="lookModalBody"></div>
+        </div>
       </div>
 
       <footer id="mainFooter" class="mt-8 flex flex-col items-center justify-between gap-2 border-t border-white/5 pt-5 text-[11px] text-slate-600 sm:flex-row">

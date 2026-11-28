@@ -142,14 +142,11 @@
     lookStatus: $("#lookStatus"),
     lookError: $("#lookError"),
     lookResult: $("#lookResult"),
-    lookAvatar: $("#lookAvatar"),
-    lookAvatarFallback: $("#lookAvatarFallback"),
-    lookName: $("#lookName"),
-    lookCid: $("#lookCid"),
-    lookTotal: $("#lookTotal"),
-    lookCount: $("#lookCount"),
-    lookItemsCount: $("#lookItemsCount"),
-    lookItems: $("#lookItems"),
+    lookSingle: $("#lookSingle"),
+    lookGallery: $("#lookGallery"),
+    lookModal: $("#lookModal"),
+    lookModalBody: $("#lookModalBody"),
+    lookModalClose: $("#lookModalClose"),
   };
 
   // ---------------- utilidades ----------------
@@ -1945,44 +1942,58 @@
     }
   }
 
-  function setLookAvatar(sources, nick) {
-    if (!els.lookAvatar) return;
-    const wrap = els.lookAvatar.closest(".look-avatar-wrap");
-    wrap?.classList.remove("has-image");
-    if (els.lookAvatarFallback) {
-      els.lookAvatarFallback.textContent = initialsOf({ username: nick || "?" });
-    }
-    lookState.avatarSources = [
-      ...new Set((sources || []).map((src) => proxiedImage(src)).filter(Boolean)),
+  function lookImageSources(avatar, data) {
+    const raw = [
+      ...(Array.isArray(avatar?.image_urls) ? avatar.image_urls : []),
+      avatar?.image_url,
+      data?.avatar_image,
+      data?.avatar_portrait,
     ];
-    lookState.avatarTry = 0;
-    els.lookAvatar.onload = () => wrap?.classList.add("has-image");
-    els.lookAvatar.onerror = () => {
-      lookState.avatarTry += 1;
-      const next = lookState.avatarSources[lookState.avatarTry];
-      if (next) {
-        els.lookAvatar.src = next;
-      } else {
-        els.lookAvatar.removeAttribute("src");
-        wrap?.classList.remove("has-image");
-      }
-    };
-    els.lookAvatar.removeAttribute("src");
-    if (lookState.avatarSources.length) {
-      els.lookAvatar.src = lookState.avatarSources[0];
-    }
+    // thumbnail_url (foto de capa) fica de fora de proposito.
+    return [...new Set(raw.map((src) => proxiedImage(src)).filter(Boolean))];
   }
 
-  function renderLookItems(items) {
-    if (!els.lookItems) return;
-    els.lookItems.replaceChildren();
+  function createLookImage(sources, alt, className, fallbackText = "?") {
+    const wrap = document.createElement("div");
+    wrap.className = className;
+    const fallback = document.createElement("span");
+    fallback.className = "look-avatar-fallback";
+    fallback.textContent = fallbackText;
+    wrap.appendChild(fallback);
+
+    const list = [...new Set((sources || []).filter(Boolean))];
+    if (!list.length) return wrap;
+
+    const img = document.createElement("img");
+    img.alt = alt || "Avatar";
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    let index = 0;
+    img.addEventListener("load", () => wrap.classList.add("has-image"));
+    img.addEventListener("error", () => {
+      index += 1;
+      if (index < list.length) {
+        img.src = list[index];
+        return;
+      }
+      img.remove();
+      wrap.classList.remove("has-image");
+    });
+    img.src = list[0];
+    wrap.appendChild(img);
+    return wrap;
+  }
+
+  function buildLookItems(items) {
+    const grid = document.createElement("div");
+    grid.className = "look-grid";
     const list = Array.isArray(items) ? items : [];
     if (!list.length) {
       const empty = document.createElement("div");
       empty.className = "look-grid-empty";
       empty.textContent = "Nenhuma peça encontrada para este look.";
-      els.lookItems.appendChild(empty);
-      return;
+      grid.appendChild(empty);
+      return grid;
     }
 
     for (const item of list) {
@@ -2035,25 +2046,160 @@
       link.textContent = "🛒 Ver na Loja";
 
       card.append(media, name, price, link);
-      els.lookItems.appendChild(card);
+      grid.appendChild(card);
     }
+    return grid;
+  }
+
+  function buildLookDetail(avatar, data) {
+    const fragment = document.createDocumentFragment();
+    const summary = document.createElement("div");
+    summary.className = "look-summary";
+    summary.appendChild(
+      createLookImage(
+        lookImageSources(avatar, data),
+        avatar?.name || data.nick,
+        "look-avatar-wrap",
+        initialsOf({ username: data.nick || "?" })
+      )
+    );
+
+    const info = document.createElement("div");
+    info.className = "look-summary-info";
+    const eyebrow = document.createElement("div");
+    eyebrow.className = "eyebrow-sm";
+    eyebrow.textContent = avatar?.current ? "Look atual" : "Avatar salvo";
+    const title = document.createElement("h2");
+    title.className = "font-display";
+    title.textContent = avatar?.name || data.display_name || data.nick || "—";
+    const cid = document.createElement("p");
+    cid.className = "mono";
+    cid.textContent = `cid ${data.cid || "—"}`;
+    const total = document.createElement("div");
+    total.className = "look-total";
+    const totalValue = Number(avatar?.total_credits ?? data.total_credits) || 0;
+    total.textContent = `💰 Valor Total: ${totalValue.toLocaleString("pt-BR")} créditos`;
+    const count = document.createElement("div");
+    count.className = "look-count";
+    const itemCount = Array.isArray(avatar?.items) ? avatar.items.length : 0;
+    count.textContent = `${itemCount === 1 ? "1 item" : `${itemCount} itens`} · avatar completo`;
+    const warning = document.createElement("p");
+    warning.className = "look-warning";
+    warning.textContent =
+      "⚠️ O valor pode variar se o item estiver em promoção ou se a conta for VIP (que tem desconto).";
+
+    info.append(eyebrow, title, cid, total, count, warning);
+    summary.appendChild(info);
+    fragment.appendChild(summary);
+
+    const head = document.createElement("div");
+    head.className = "look-items-head";
+    const headLabel = document.createElement("div");
+    headLabel.className = "eyebrow-sm";
+    headLabel.textContent = "Peças do look";
+    const pill = document.createElement("span");
+    pill.className = "count-pill";
+    pill.textContent = String(itemCount);
+    head.append(headLabel, pill);
+    fragment.appendChild(head);
+    fragment.appendChild(buildLookItems(avatar?.items));
+    return fragment;
+  }
+
+  function openLookModal(avatar, data) {
+    if (!els.lookModal || !els.lookModalBody) return;
+    els.lookModalBody.replaceChildren(buildLookDetail(avatar, data));
+    els.lookModal.classList.remove("hidden");
+    els.lookModal.setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeLookModal() {
+    els.lookModal?.classList.add("hidden");
+    els.lookModal?.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
   }
 
   function renderLook(data) {
-    const items = Array.isArray(data.items) ? data.items : [];
-    const total = Number(data.total_credits) || 0;
-    if (els.lookName) els.lookName.textContent = data.display_name || data.nick || "—";
-    if (els.lookCid) els.lookCid.textContent = `cid ${data.cid || "—"}`;
-    if (els.lookTotal) {
-      els.lookTotal.textContent = `💰 Valor Total: ${total.toLocaleString("pt-BR")} créditos`;
-    }
-    if (els.lookCount) {
-      els.lookCount.textContent = `${items.length === 1 ? "1 item" : `${items.length} itens`} · avatar completo`;
-    }
-    if (els.lookItemsCount) els.lookItemsCount.textContent = String(items.length);
-    setLookAvatar([data.avatar_image, data.avatar_thumbnail], data.nick);
-    renderLookItems(items);
+    const fallbackAvatar = {
+      id: "current",
+      name: "Look atual",
+      image_url: data.avatar_image || "",
+      image_urls: [data.avatar_image, data.avatar_portrait].filter(Boolean),
+      total_credits: data.total_credits || 0,
+      item_count: data.item_count || 0,
+      items: Array.isArray(data.items) ? data.items : [],
+      current: true,
+    };
+    const avatars =
+      Array.isArray(data.avatars) && data.avatars.length ? data.avatars : [fallbackAvatar];
+
     els.lookResult?.classList.remove("hidden");
+
+    if (avatars.length === 1) {
+      els.lookGallery?.classList.add("hidden");
+      if (els.lookGallery) els.lookGallery.replaceChildren();
+      els.lookSingle?.classList.remove("hidden");
+      els.lookSingle?.replaceChildren(buildLookDetail(avatars[0], data));
+      return;
+    }
+
+    els.lookSingle?.classList.add("hidden");
+    if (els.lookSingle) els.lookSingle.replaceChildren();
+    els.lookGallery?.classList.remove("hidden");
+    if (!els.lookGallery) return;
+    els.lookGallery.replaceChildren();
+
+    const head = document.createElement("div");
+    head.className = "look-gallery-head";
+    const headLabel = document.createElement("div");
+    headLabel.className = "eyebrow-sm";
+    headLabel.textContent = "Avatares encontrados";
+    const pill = document.createElement("span");
+    pill.className = "count-pill";
+    pill.textContent = String(avatars.length);
+    head.append(headLabel, pill);
+    els.lookGallery.appendChild(head);
+
+    for (const avatar of avatars) {
+      const card = document.createElement("article");
+      card.className = "look-avatar-card";
+
+      card.appendChild(
+        createLookImage(
+          lookImageSources(avatar, data),
+          avatar.name || data.nick,
+          "look-avatar-card-media",
+          initialsOf({ username: data.nick || "?" })
+        )
+      );
+
+      const body = document.createElement("div");
+      body.className = "look-avatar-card-body";
+      const badge = document.createElement("span");
+      badge.className = "look-avatar-card-badge";
+      badge.textContent = avatar.current ? "Atual" : "Salvo";
+      const name = document.createElement("h3");
+      name.className = "look-avatar-card-name";
+      name.textContent = avatar.name || "Look";
+      const total = document.createElement("div");
+      total.className = "look-avatar-card-total";
+      const totalValue = Number(avatar.total_credits) || 0;
+      total.textContent = `💰 ${totalValue.toLocaleString("pt-BR")} créditos`;
+      const count = document.createElement("div");
+      count.className = "look-avatar-card-count";
+      const itemCount = Array.isArray(avatar.items) ? avatar.items.length : 0;
+      count.textContent = itemCount === 1 ? "1 item" : `${itemCount} itens`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn-primary look-avatar-card-btn";
+      button.textContent = "Ver Detalhes";
+      button.addEventListener("click", () => openLookModal(avatar, data));
+
+      body.append(badge, name, total, count, button);
+      card.appendChild(body);
+      els.lookGallery.appendChild(card);
+    }
   }
 
   async function extractLook(event) {
@@ -2095,6 +2241,15 @@
   }
 
   els.lookForm?.addEventListener("submit", extractLook);
+  els.lookModalClose?.addEventListener("click", closeLookModal);
+  els.lookModal?.addEventListener("click", (event) => {
+    if (event.target === els.lookModal) closeLookModal();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && els.lookModal && !els.lookModal.classList.contains("hidden")) {
+      closeLookModal();
+    }
+  });
   const savedLookNick = safeStorage.get("look:nick");
   if (savedLookNick && els.lookInput && !els.lookInput.value) {
     els.lookInput.value = savedLookNick;

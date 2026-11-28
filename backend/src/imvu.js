@@ -21,6 +21,7 @@ const IMAGE_CACHE_MAX = 250;
 const LOOK_TTL = 5 * 60_000;
 const PRODUCT_TTL = 10 * 60_000;
 const LOOK_MAX_PRODUCTS = 150;
+const LOOK_MAX_OUTFITS = 12;
 const LOOK_CONCURRENCY = 10;
 // Pagina publica da sala (og:title/og:image): fallback quando o room node 403.
 const ROOM_WEB_META_TTL = 10 * 60_000;
@@ -652,6 +653,42 @@ export class ImvuApi {
    * Extrai o look completo de um nick:
    * avatar 2D + todas as pecas (profile_outfit) + preco total em creditos.
    */
+  /**
+   * Lista os outfits salvos do usuario (/user/user-<cid>/outfits).
+   * Requer a sessao autenticada; retorna [] se o endpoint negar.
+   */
+  async listOutfits(cid) {
+    const id = String(cid || "");
+    if (!/^\d+$/.test(id)) return { outfits: [], status: 0 };
+    const env = await this.getJson(`/user/user-${id}/outfits`).catch(() => null);
+    const status = this.lastStatus;
+    const den = env?.denormalized;
+    if (!den) return { outfits: [], status };
+
+    const outfits = [];
+    const seen = new Set();
+    for (const [key, node] of Object.entries(den)) {
+      const data = node?.data || {};
+      const list = Array.isArray(data.pids) ? data.pids : [];
+      const pids = [
+        ...new Set(list.map((pid) => String(pid)).filter((pid) => /^\d+$/.test(pid))),
+      ];
+      if (!pids.length) continue;
+      const signature = [...pids].sort((a, b) => Number(a) - Number(b)).join(",");
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      outfits.push({
+        id: String(data.outfit_id || key.match(/outfits?\/(\d+)/)?.[1] || key),
+        name: String(data.outfit_name || "").trim(),
+        image: normalizeUrl(data.full_image || data.outfit_image || ""),
+        pids,
+        rating: String(data.rating || "GA"),
+        privacy: String(data.privacy || ""),
+      });
+    }
+    return { outfits, status };
+  }
+
   async extractLook(nick) {
     const clean = safeNick(nick);
     if (!clean) return null;
@@ -664,47 +701,116 @@ export class ImvuApi {
     const cid = String(person.cid);
     if (!/^\d+$/.test(cid)) return null;
 
-    const [userNode, outfitEnv] = await Promise.all([
+    const [userNode, outfitEnv, outfitsResult] = await Promise.all([
       this.userNode(cid, 0).catch(() => null),
       this.getJson(`/profile_outfit/profile_outfit-${cid}`).catch(() => null),
+      this.listOutfits(cid).catch(() => ({ outfits: [], status: 0 })),
     ]);
 
-    const outfit =
+    const outfitData =
       this.firstNode(outfitEnv, (key) => key.includes("/profile_outfit/"))?.node?.data ||
       this.firstNode(outfitEnv)?.node?.data ||
       {};
-    const rawProducts = Array.isArray(outfit.products) ? outfit.products : [];
-    const ids = [
-      ...new Set(
-        rawProducts
-          .map((item) => {
-            const direct = String(item?.product_id || "");
-            if (/^\d+$/.test(direct)) return direct;
-            const fromUrl = String(item?.id || "").match(/product-(\d+)/);
-            return fromUrl ? fromUrl[1] : "";
-          })
-          .filter(Boolean)
-      ),
-    ].slice(0, LOOK_MAX_PRODUCTS);
+    const userData = userNode?.data || {};
 
-    const items = [];
-    for (let i = 0; i < ids.length; i += LOOK_CONCURRENCY) {
-      const chunk = ids.slice(i, i + LOOK_CONCURRENCY);
-      const details = await Promise.all(chunk.map((id) => this.productDetail(id)));
-      for (const item of details) if (item) items.push(item);
+    const productIdsOf = (list) =>
+      [
+        ...new Set(
+          (Array.isArray(list) ? list : [])
+            .map((item) => {
+              const direct = String(item?.product_id || "");
+              if (/^\d+$/.test(direct)) return direct;
+              const fromUrl = String(item?.id || "").match(/product-(\d+)/);
+              return fromUrl ? fromUrl[1] : "";
+            })
+            .filter(Boolean)
+        ),
+      ].slice(0, LOOK_MAX_PRODUCTS);
+
+    const currentPids = productIdsOf(outfitData.products);
+    // Imagem do boneco de corpo inteiro: avatar_image/avatar_portrait_image.
+    // thumbnail_url e a foto de capa e NAO entra aqui.
+    const avatarImages = [
+      normalizeUrl(userData.avatar_image || person.render || ""),
+      normalizeUrl(userData.avatar_portrait_image || person.portrait || ""),
+    ].filter(Boolean);
+
+    const definitions = [];
+    if (currentPids.length) {
+      definitions.push({
+        id: "current",
+        name: "Look atual",
+        pids: currentPids,
+        image_urls: avatarImages,
+        current: true,
+      });
+    }
+    for (const saved of outfitsResult.outfits || []) {
+      if (!saved.pids?.length) continue;
+      definitions.push({
+        id: saved.id || `outfit-${definitions.length + 1}`,
+        name: saved.name || "",
+        pids: saved.pids,
+        image_urls: [saved.image, ...avatarImages].filter(Boolean),
+        current: false,
+      });
     }
 
-    const total = items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
-    const userData = userNode?.data || {};
+    // Dedupe pelo conjunto de produtos; outfits salvos iguais ao atual
+    // viram um so card, marcado como atual.
+    const bySignature = new Map();
+    for (const def of definitions) {
+      const signature = [...def.pids].sort((a, b) => Number(a) - Number(b)).join(",");
+      const existing = bySignature.get(signature);
+      if (existing) {
+        if (def.current) existing.current = true;
+        if (!existing.name || existing.name === "Look atual") {
+          existing.name = def.name || existing.name;
+        }
+        existing.image_urls = [...new Set([...existing.image_urls, ...def.image_urls])];
+        continue;
+      }
+      bySignature.set(signature, { ...def, signature });
+    }
+    const outfitDefs = [...bySignature.values()]
+      .sort((a, b) => Number(b.current) - Number(a.current))
+      .slice(0, LOOK_MAX_OUTFITS);
+
+    const avatars = [];
+    for (const def of outfitDefs) {
+      const items = [];
+      for (let i = 0; i < def.pids.length; i += LOOK_CONCURRENCY) {
+        const chunk = def.pids.slice(i, i + LOOK_CONCURRENCY);
+        const details = await Promise.all(chunk.map((id) => this.productDetail(id)));
+        for (const item of details) if (item) items.push(item);
+      }
+      const total = items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+      avatars.push({
+        id: def.id,
+        name: def.name || (def.current ? "Look atual" : "Look"),
+        image_url: def.image_urls[0] || "",
+        image_urls: [...new Set(def.image_urls)],
+        total_credits: total,
+        item_count: items.length,
+        items,
+        current: Boolean(def.current),
+      });
+    }
+
+    const current = avatars.find((avatar) => avatar.current) || avatars[0] || null;
     const result = {
       nick: person.username || clean,
       display_name: person.displayName || person.username || clean,
       cid,
-      avatar_image: normalizeUrl(userData.avatar_image || person.render || ""),
+      avatar_image: current?.image_url || avatarImages[0] || "",
+      avatar_portrait: avatarImages[1] || "",
       avatar_thumbnail: normalizeUrl(userData.thumbnail_url || person.avatar || ""),
-      total_credits: total,
-      item_count: items.length,
-      items,
+      total_credits: current?.total_credits || 0,
+      item_count: current?.item_count || 0,
+      items: current?.items || [],
+      avatars,
+      outfit_count: avatars.length,
+      outfits_status: outfitsResult.status || 0,
     };
     this.lookCache.set(cacheKey, { at: now(), result });
     this.lookCache.set(cid, { at: now(), result });
