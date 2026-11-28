@@ -1,19 +1,21 @@
 ﻿{
   "name": "IMVU Radar",
   "short_name": "Radar",
-  "description": "Acompanhe a sala atual de qualquer nick do IMVU em tempo real.",
-  "start_url": "./",
-  "scope": "./",
+  "start_url": "/imvu-site/",
+  "scope": "/imvu-site/",
   "display": "standalone",
-  "background_color": "#06060b",
+  "background_color": "#0d0d12",
   "theme_color": "#7c3aed",
   "icons": [
     {
-      "src": "icons/icon-192.png",
+      "src": "/imvu-site/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "type": "image/png"
+    },
+    {
+      "src": "/imvu-site/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
     }
   ]
 }
-

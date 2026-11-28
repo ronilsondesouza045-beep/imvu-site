@@ -15,8 +15,12 @@
       rel="stylesheet"
     />
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="manifest" href="manifest.json" />
-    <meta name="theme-color" content="#06060b" />
+    <link rel="manifest" href="/imvu-site/manifest.json" />
+    <meta name="theme-color" content="#7c3aed" />
+    <link rel="apple-touch-icon" href="/imvu-site/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Radar" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body class="min-h-screen text-slate-100 antialiased">
@@ -474,5 +478,14 @@
     <script src="config.js"></script>
     <script src="app.js"></script>
     <script src="radio.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/imvu-site/sw.js')
+            .then(reg => console.log('Service Worker registrado!', reg))
+            .catch(err => console.error('Erro ao registrar:', err));
+        });
+      }
+    </script>
   </body>
 </html>
