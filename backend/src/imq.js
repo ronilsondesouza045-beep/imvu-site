@@ -637,9 +637,10 @@ export class ImqClient {
       // Se o estado apontar para OUTRA sala, ela vence a sala da propria fila.
       let occupant = stateCid;
       const movedRoom = propRoom && info.room && propRoom !== info.room ? propRoom : "";
-      if (!occupant && movedRoom) {
+      if (!occupant) {
         const ownerCid = info.room.split("-")[0];
-        // chat-<cid>-* dos alvos: o dono da fila e o proprio alvo.
+        // chat-<cid>-* dos alvos: o dono da fila e o proprio alvo. Sem isso,
+        // um evento updated em chat-<cid>-1 (My Room) sem user_id era ignorado.
         if (this.targetCids.has(ownerCid)) occupant = ownerCid;
       }
       if (occupant && (movedRoom || info.room)) {

@@ -182,6 +182,44 @@ export class RadarTracker {
     return this.tracks.get(track.cid) === track && track.gen === gen;
   }
 
+  /** IMQ e a fonte primaria; todo o resto e fallback (scanner/relation/etc.). */
+  roomSourceOf(via) {
+    const value = String(via || "");
+    if (
+      value === "imq" ||
+      value === "presence" ||
+      value === "myroom" ||
+      value.startsWith("imq_") ||
+      value === "probe_roster"
+    ) {
+      return "imq";
+    }
+    return "scanner";
+  }
+
+  /**
+   * Atualiza a state machine. Fallback (scanner/relation/listas) nunca
+   * sobrescreve uma sala atual vinda do IMQ, a menos que seja o mesmo ID.
+   */
+  applyCurrentRoom(track, rid, { source, isPrivate = false } = {}) {
+    const id = String(rid || "");
+    const incoming = source === "imq" ? "imq" : "scanner";
+    const current = track.currentRoom;
+    if (current?.source === "imq" && incoming !== "imq" && current.id !== id) {
+      this.log.info(
+        `[IMQ] ${track.nick}: ignorando ${incoming} para ${id}; estado atual ${current.id} veio do IMQ`
+      );
+      return false;
+    }
+    track.currentRoom = {
+      id,
+      isPrivate: Boolean(isPrivate) || id.endsWith("-1"),
+      source: current?.source === "imq" ? "imq" : incoming,
+      at: now(),
+    };
+    return true;
+  }
+
 
 
   // ---------------- ciclo de vida do watcher ----------------
@@ -262,6 +300,9 @@ export class RadarTracker {
       occupants: new Map(),
       state: "loading",
       statusMsg: "Procurando sala atual...",
+      // State machine: sala atual com prioridade. `source: "imq"` vence
+      // qualquer fallback; so um evento deleted/left do IMQ limpa.
+      currentRoom: null,
       detectedBy: "",
       locationHidden: false,
       locationHiddenAt: 0,
@@ -571,6 +612,8 @@ export class RadarTracker {
    * O IMQ continua assinado e pode reverter isso se um evento trouxer sala.
    */
   markLocationHidden(track, reason = "sala nao exposta pelo IMVU") {
+    // Nunca esconde uma sala que ja temos (principalmente vinda do IMQ).
+    if (track.rooms.size || track.currentRoom) return;
     if (track.locationHidden) return;
     track.locationHidden = true;
     track.locationHiddenAt = now();
@@ -1063,11 +1106,7 @@ export class RadarTracker {
               scanned += 1;
               if (this.tracks.get(track.cid) !== track) return;
               if (!people.some((person) => person.cid === track.cid)) continue;
-              if (!found) {
-                found = true;
-                earlyResolve?.(true);
-              }
-              await this.setRoom(track, rid, {
+              const applied = await this.setRoom(track, rid, {
                 seed: people,
                 via: "public_scan",
                 hint: {
@@ -1082,6 +1121,11 @@ export class RadarTracker {
                 },
                 gen: track.gen,
               });
+              if (!applied) continue;
+              if (!found) {
+                found = true;
+                earlyResolve?.(true);
+              }
             }
           })
         );
@@ -1342,9 +1386,20 @@ export class RadarTracker {
   }
 
   async setRoom(track, rid, { seed = null, via = "imq", hint = null, gen = track.gen } = {}) {
-    if (!this.isActive(track, gen)) return;
+    if (!this.isActive(track, gen)) return false;
     const id = String(rid || "");
-    if (!/^\d+-\d+$/.test(id)) return;
+    if (!/^\d+-\d+$/.test(id)) return false;
+
+    // REGRA DE OURO: um fallback (scanner/relation/listas) nunca troca a
+    // sala atual quando ela veio do IMQ. Mesmo ID pode enriquecer.
+    const source = this.roomSourceOf(via);
+    const current = track.currentRoom;
+    if (current?.source === "imq" && source !== "imq" && current.id !== id) {
+      this.log.info(
+        `[IMQ] ${track.nick}: ignorando ${via} para ${id}; estado atual ${current.id} veio do IMQ`
+      );
+      return false;
+    }
 
     if (track.locationHidden) {
       track.locationHidden = false;
@@ -1357,6 +1412,13 @@ export class RadarTracker {
     if (existing) {
       existing.lastSeenAt = now();
       existing.detectedBy = via;
+      this.applyCurrentRoom(track, id, {
+        source,
+        isPrivate:
+          existing.room.privacy === "private" ||
+          Boolean(existing.room.restricted) ||
+          id.endsWith("-1"),
+      });
       if (Array.isArray(seed) && seed.length) {
         const previous = existing.occupants;
         existing.occupants = this.buildOccupants(track, seed);
@@ -1366,7 +1428,7 @@ export class RadarTracker {
         }
       }
       this.selectPrimary(track);
-      return;
+      return true;
     }
 
     const hintName = String(hint?.name || hint?.roomName || "").trim();
@@ -1374,14 +1436,15 @@ export class RadarTracker {
       hint?.isPrivate ?? hint?.is_private ?? String(hint?.privacy || "").toLowerCase() === "private"
     );
     const ownMyRoom = id === `${track.cid}-1`;
-    const initialPrivacy = hintPrivate ? "private" : "public";
+    // My Room (<cid>-1) e sempre privada, mesmo sem metadata da API.
+    const initialPrivacy = hintPrivate || ownMyRoom ? "private" : "public";
     const fallbackRoom = {
       roomId: id,
       name: displayRoomName(hintName, id, { ownMyRoom }),
       privacy: initialPrivacy,
-      privacyLabel: hintPrivate ? "Privada" : "Pública",
+      privacyLabel: initialPrivacy === "private" ? "Privada" : "Pública",
       type: classifyRoomType(track.cid, id, initialPrivacy, hint),
-      restricted: hintPrivate,
+      restricted: initialPrivacy === "private",
       owner: "",
       occupancy: Array.isArray(seed) ? seed.length : 0,
       capacity: 0,
@@ -1395,6 +1458,11 @@ export class RadarTracker {
       message: "",
       source: hint ? "catvu" : "imvu",
     };
+
+    this.applyCurrentRoom(track, id, {
+      source,
+      isPrivate: initialPrivacy === "private" || ownMyRoom,
+    });
 
     const previousRoom = track.room;
     const seq = (track.roomSetSeq || 0) + 1;
@@ -1478,6 +1546,11 @@ export class RadarTracker {
     liveEntry.type = room.type;
     liveEntry.occupants = this.buildOccupants(track, people);
     liveEntry.lastRefreshedAt = now();
+    if (track.currentRoom?.id === id) {
+      track.currentRoom.isPrivate =
+        privacy === "private" || ownMyRoom || Boolean(room.restricted);
+      track.currentRoom.at = now();
+    }
     this.selectPrimary(track);
     track.statusMsg = `Na sala ${room.name || id}`;
 
@@ -1501,6 +1574,8 @@ export class RadarTracker {
         tag: `room-${id}`,
       });
     }
+
+    return true;
   }
 
   mergeOccupant(previous, incoming) {
@@ -1827,6 +1902,12 @@ export class RadarTracker {
     const id = String(rid || "");
     const entry = track.rooms.get(id);
     if (!entry) return;
+    // A sala atual so sai por evento deleted/left do IMQ. Fallbacks
+    // (refresh, roster vazio, scanner) nunca apagam o estado atual.
+    if (track.currentRoom?.id === id && reason !== "left") {
+      this.log.info(`[IMQ] preservando sala atual ${id} de ${track.nick} (motivo: ${reason})`);
+      return;
+    }
     if (track.catvuRoomId === id) this.stopCatvuWatch(track);
 
     track.rooms.delete(id);
@@ -1944,10 +2025,19 @@ export class RadarTracker {
     const isPublicRoom = live.room.privacy !== "private" && !live.room.restricted;
     const targetInRoster = people.some((person) => person.cid === track.cid);
     if (isPublicRoom && people.length && !targetInRoster) {
-      live.missedCount = (live.missedCount || 0) + 1;
-      if (live.missedCount >= 2) {
-        this.removeRoom(track, id, "not_in_room");
-        return;
+      if (track.currentRoom?.id === id) {
+        // State machine: roster de fallback nao derruba a sala atual.
+        // Somente o evento deleted/left do IMQ limpa o estado.
+        live.missedCount = 0;
+        this.log.info(
+          `[IMQ] mantendo sala atual ${id} de ${track.nick}; roster nao confirma (so deleted limpa)`
+        );
+      } else {
+        live.missedCount = (live.missedCount || 0) + 1;
+        if (live.missedCount >= 2) {
+          this.removeRoom(track, id, "not_in_room");
+          return;
+        }
       }
     } else if (targetInRoster) {
       live.missedCount = 0;
@@ -2038,6 +2128,15 @@ export class RadarTracker {
           const existing = track.rooms.get(room);
           if (existing) {
             existing.lastSeenAt = now();
+            // IMQ confirmou a sala que o fallback ja tinha: promove a fonte
+            // para imq (a partir daqui o scanner nao pode trocar o estado).
+            this.applyCurrentRoom(track, room, {
+              source: "imq",
+              isPrivate:
+                existing.room.privacy === "private" ||
+                Boolean(existing.room.restricted) ||
+                room.endsWith("-1"),
+            });
           } else {
             const elapsed = now() - (track.imqWatchStartedAt || track.createdAt || now());
             this.log.info(
@@ -2049,6 +2148,10 @@ export class RadarTracker {
           this.log.info(
             `[IMQ] ${track.nick} (${track.cid}): saiu da sala ${room} (${event.source || "imq"})`
           );
+          if (track.currentRoom?.id === room) {
+            track.currentRoom = null;
+            this.log.info(`[IMQ] ${track.nick}: estado atual limpo (deleted ${room})`);
+          }
           if (track.presenceRoom === room) {
             track.presenceRoom = "";
             track.presenceRoomAt = 0;
@@ -2107,6 +2210,13 @@ export class RadarTracker {
       const existing = track.rooms.get(room);
       if (existing) {
         existing.lastSeenAt = now();
+        this.applyCurrentRoom(track, room, {
+          source: "imq",
+          isPrivate:
+            existing.room.privacy === "private" ||
+            Boolean(existing.room.restricted) ||
+            room.endsWith("-1"),
+        });
       } else {
         this.log.info(`[IMQ] ${track.nick} (${track.cid}): state aponta para sala ${room}`);
         this.scheduleRoomLoad(track, room, "presence", { immediate: true });
