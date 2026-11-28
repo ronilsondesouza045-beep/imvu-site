@@ -17,8 +17,90 @@ const CHAT_DIRECTORY_TTL = 120_000;
 const USER_TTL = 10 * 60_000;
 const IMAGE_TTL = 10 * 60_000;
 const IMAGE_CACHE_MAX = 250;
+// Pagina publica da sala (og:title/og:image): fallback quando o room node 403.
+const ROOM_WEB_META_TTL = 10 * 60_000;
+const ROOM_WEB_META_EMPTY_TTL = 2 * 60_000;
 
 const now = () => Date.now();
+
+const HTML_ENTITIES = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  aacute: "á",
+  agrave: "à",
+  acirc: "â",
+  atilde: "ã",
+  auml: "ä",
+  eacute: "é",
+  egrave: "è",
+  ecirc: "ê",
+  euml: "ë",
+  iacute: "í",
+  igrave: "ì",
+  icirc: "î",
+  iuml: "ï",
+  oacute: "ó",
+  ograve: "ò",
+  ocirc: "ô",
+  otilde: "õ",
+  ouml: "ö",
+  uacute: "ú",
+  ugrave: "ù",
+  ucirc: "û",
+  uuml: "ü",
+  ccedil: "ç",
+  ntilde: "ñ",
+  Aacute: "Á",
+  Agrave: "À",
+  Acirc: "Â",
+  Atilde: "Ã",
+  Auml: "Ä",
+  Eacute: "É",
+  Egrave: "È",
+  Ecirc: "Ê",
+  Euml: "Ë",
+  Iacute: "Í",
+  Igrave: "Ì",
+  Icirc: "Î",
+  Iuml: "Ï",
+  Oacute: "Ó",
+  Ograve: "Ò",
+  Ocirc: "Ô",
+  Otilde: "Õ",
+  Ouml: "Ö",
+  Uacute: "Ú",
+  Ugrave: "Ù",
+  Ucirc: "Û",
+  Uuml: "Ü",
+  Ccedil: "Ç",
+  Ntilde: "Ñ",
+  hellip: "…",
+  mdash: "—",
+  ndash: "–",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  middot: "·",
+  bull: "•",
+  deg: "°",
+  euro: "€",
+};
+
+function decodeHtmlEntities(value) {
+  return String(value || "").replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (match, entity) => {
+    if (entity[0] === "#") {
+      const hex = entity[1]?.toLowerCase() === "x";
+      const code = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+    }
+    return HTML_ENTITIES[entity] ?? match;
+  });
+}
 
 function normalizeUrl(value) {
   const s = String(value || "");
@@ -191,6 +273,7 @@ export class ImvuApi {
     this.assetSceneCache = new Map();
     this.friendCidsCache = { at: 0, cids: new Set() };
     this.roomMetaCache = new Map();
+    this.roomWebMetaCache = new Map();
     this.rosterCache = new Map();
     this.roomListCache = new Map();
     this.roomListEntriesCache = new Map();
@@ -887,10 +970,62 @@ export class ImvuApi {
     return meta;
   }
 
+  /**
+   * Metadados publicos da pagina da sala. Salas publicas (mesmo 18+/restritas
+   * no room node) entregam og:title/og:image; My Room e salas privadas nao.
+   * Cache: 10 min positivo, 2 min negativo.
+   */
+  async roomWebMeta(rid) {
+    const id = String(rid || "");
+    if (!/^\d+-\d+$/.test(id)) return null;
+    const cached = this.roomWebMetaCache.get(id);
+    const ttl = cached?.meta ? ROOM_WEB_META_TTL : ROOM_WEB_META_EMPTY_TTL;
+    if (cached && now() - cached.at < ttl) return cached.meta;
+
+    try {
+      const response = await fetch(`https://www.imvu.com/next/chat/room-${id}/`, {
+        headers: {
+          "User-Agent": this.ua,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!response.ok) {
+        this.roomWebMetaCache.set(id, { at: now(), meta: null });
+        return null;
+      }
+      const html = await response.text();
+      const metaContent = (property) => {
+        const tag =
+          new RegExp(`<meta[^>]*property=["']${property}["'][^>]*>`, "i").exec(html)?.[0] || "";
+        const content = /content=["']([^"']*)["']/i.exec(tag);
+        return content ? decodeHtmlEntities(content[1]).replace(/\s+/g, " ").trim() : "";
+      };
+      const name = metaContent("og:title");
+      if (!name) {
+        this.roomWebMetaCache.set(id, { at: now(), meta: null });
+        return null;
+      }
+      const meta = {
+        roomId: id,
+        name,
+        description: metaContent("og:description").slice(0, 300),
+        image: normalizeUrl(metaContent("og:image")),
+        public: true,
+      };
+      this.roomWebMetaCache.set(id, { at: now(), meta });
+      return meta;
+    } catch {
+      this.roomWebMetaCache.set(id, { at: now(), meta: null });
+      return null;
+    }
+  }
+
   async roomInfo(rid, hint = null) {
     const id = String(rid || "");
     const meta = await this.roomMeta(id).catch(() => null);
-    if (!meta && !hint) return null;
 
     const m = meta || {};
     const restricted = Boolean(m.restricted);
@@ -898,9 +1033,32 @@ export class ImvuApi {
     const hintPrivate = Boolean(
       hint?.isPrivate ?? hint?.is_private ?? String(hint?.privacy || "").toLowerCase() === "private"
     );
-    const privateHint =
-      restricted || hintPrivate || String(m.privacy || "").toLowerCase() === "private";
+    const apiPrivate = String(m.privacy || "").toLowerCase() === "private";
     let name = String(m.name || "") || hintName;
+
+    // 403 no room node pode ser apenas restricao de acesso (18+, membros).
+    // A pagina publica confirma sala visivel: og:title real = publica.
+    const needsWebMeta =
+      !meta || restricted || !name || hintPrivate || apiPrivate || id.endsWith("-1");
+    const webMeta = needsWebMeta ? await this.roomWebMeta(id).catch(() => null) : null;
+    if (!meta && !hint && !webMeta) return null;
+
+    const webPublic = Boolean(webMeta?.name) && !id.endsWith("-1");
+    const privateHint = webPublic
+      ? false
+      : restricted || hintPrivate || apiPrivate;
+
+    if (webMeta?.name) {
+      const apiName = String(m.name || "").trim();
+      if (
+        !apiName ||
+        apiName === id ||
+        /^Sala (privada|p[úu]blica) \(ID:/i.test(apiName) ||
+        /^Sala \d+-\d+$/.test(apiName)
+      ) {
+        name = webMeta.name;
+      }
+    }
     if (!name) {
       // Sala privada de terceiro: o room node vem 403 e nao entrega o nome.
       // Mostra o ID completo para o link e o painel continuarem uteis.
@@ -939,16 +1097,16 @@ export class ImvuApi {
     return {
       roomId: id,
       name,
-      privacy: isPrivate ? "private" : String(m.privacy || "public"),
+      privacy: isPrivate ? "private" : "public",
       privacyLabel: isPrivate ? "Privada" : "Pública",
       room_type: String(m.room_type || m.roomType || m.type || ""),
       restricted,
       owner,
-      occupancy: intOr(m.occupancy, 0),
-      capacity: intOr(m.capacity, 0),
-      render: normalizeUrl(m.rendered_image || ""),
-      cover: normalizeUrl(m.image_url || ""),
-      description: String(m.description || "").slice(0, 300),
+      occupancy: Math.max(intOr(m.occupancy, 0), intOr(hint?.occupancy, 0)),
+      capacity: Math.max(intOr(m.capacity, 0), intOr(hint?.capacity, 0)),
+      render: normalizeUrl(m.rendered_image || webMeta?.image || ""),
+      cover: normalizeUrl(m.image_url || webMeta?.image || ""),
+      description: String(m.description || webMeta?.description || "").slice(0, 300),
       joinUrl: String(m.join_room_url || (id ? `https://go.imvu.com/chat/room-${id}` : "")),
       directLink,
       webLink,

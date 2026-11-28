@@ -1,4 +1,4 @@
-import { ImvuApi, safeNick } from "./imvu.js";
+﻿import { ImvuApi, safeNick } from "./imvu.js";
 import { ImqClient, isLeftAction, isLiveAction, parseRoomId } from "./imq.js";
 import {
   findRooms as catvuFind,
@@ -1416,7 +1416,6 @@ export class RadarTracker {
         source,
         isPrivate:
           existing.room.privacy === "private" ||
-          Boolean(existing.room.restricted) ||
           id.endsWith("-1"),
       });
       if (Array.isArray(seed) && seed.length) {
@@ -1516,7 +1515,7 @@ export class RadarTracker {
     let privacy = initialPrivacy;
     let room = { ...fallbackRoom };
     if (info) {
-      const isPrivate = info.privacy === "private" || Boolean(info.restricted);
+      const isPrivate = info.privacy === "private";
       privacy = isPrivate ? "private" : "public";
       room = {
         ...fallbackRoom,
@@ -1548,7 +1547,7 @@ export class RadarTracker {
     liveEntry.lastRefreshedAt = now();
     if (track.currentRoom?.id === id) {
       track.currentRoom.isPrivate =
-        privacy === "private" || ownMyRoom || Boolean(room.restricted);
+        privacy === "private" || ownMyRoom;
       track.currentRoom.at = now();
     }
     this.selectPrimary(track);
@@ -1993,7 +1992,7 @@ export class RadarTracker {
     live.lastRefreshedAt = now();
 
     if (info) {
-      const isPrivate = info.privacy === "private" || Boolean(info.restricted);
+      const isPrivate = info.privacy === "private";
       const ownMyRoom = id === `${track.cid}-1`;
       const infoName = displayRoomName(info.name, id, { ownMyRoom });
       const liveName = displayRoomName(live.room.name, id, { ownMyRoom });
@@ -2134,7 +2133,6 @@ export class RadarTracker {
               source: "imq",
               isPrivate:
                 existing.room.privacy === "private" ||
-                Boolean(existing.room.restricted) ||
                 room.endsWith("-1"),
             });
           } else {
@@ -2214,7 +2212,6 @@ export class RadarTracker {
           source: "imq",
           isPrivate:
             existing.room.privacy === "private" ||
-            Boolean(existing.room.restricted) ||
             room.endsWith("-1"),
         });
       } else {
